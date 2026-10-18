@@ -20,6 +20,7 @@ src/
   components/ui/button.tsx  # shadcn Button, added by the CLI for the demo
 test/
   dilekce.test.tsx          # vitest browser mode, real Chromium
+tsconfig.strict.json        # registry/ only, with exactOptionalPropertyTypes + noUncheckedIndexedAccess
 components.json             # shadcn config for the demo project
 .claude/agents/             # Agent briefs: web-engineer, localizer, browser-tester
 ```
@@ -42,6 +43,22 @@ the types `DilekceMode`, `DilekceDensity`, `DilekceMessages`, `DilekceErrors`,
   `n/max` counter for `maxLength`.
 - `DilekceInput`, `DilekceNumber`: `leading`, `trailing` affixes.
 - `DilekceCheckboxGroup` is uncontrolled unless `value` is passed.
+- Behaviour worth knowing (each has a test):
+  - A second submit while an async `validate` runs is ignored; the replay
+    goes through once, and re-validates when values changed during the check.
+  - `errors` passed in survive the `reset` React 19 fires after a function
+    action (`useActionState`). `onReset` clears the internal copy only if the
+    user edited away from the prop, or if a reset button was clicked.
+  - A user `ref` is merged with the internal one (`useMergedRef`) on `Dilekce`,
+    `DilekceField`, `DilekceNumber` and `DilekceSelect`. Any new component
+    that sets an internal ref and spreads `...props` must do the same.
+  - `validate` gets the value read from the field's controls (checked boxes,
+    checked radio, first control), so a `name` on the control works; server
+    `errors` match the field's name or its control's.
+  - Disabled controls (own attribute or a disabled `DilekceSection`) skip
+    validation, `advance`, scrub and steppers. Checked at event time with
+    `:disabled`, never only from the prop.
+  - `step="any"` steppers move by 1, keeping the value's decimals.
 - Message keys beyond validity: `pending`, `invalidOne`, `invalidMany`
   (`{count}`), `copy`, `copied`.
 
@@ -49,10 +66,11 @@ the types `DilekceMode`, `DilekceDensity`, `DilekceMessages`, `DilekceErrors`,
 
 ```bash
 bun run dev              # vite demo on :5318
-bun run test             # lint + typecheck + vitest (Chromium)
+bun run test             # lint + typecheck + typecheck:strict + vitest (Chromium)
 bun run lint             # oxlint + oxfmt --check
 bun run lint:fix         # oxlint --fix + oxfmt
 bun run typecheck        # tsc --noEmit
+bun run typecheck:strict # registry/ under exactOptionalPropertyTypes + noUncheckedIndexedAccess
 bun run registry:build   # shadcn build → public/r
 bun run build            # registry + static demo
 ```
@@ -87,6 +105,18 @@ bun run build            # registry + static demo
 
 ### Notes
 
+- **Values written from code.** `data-empty`, the counter, the filled dash and
+  dirty are kept in step with: controlled `value` changes (each control calls
+  `field.sync()` from a layout effect when its value changes), form reset,
+  input/change events, and for a select, code assigning `select.value` or
+  `selectedIndex` (both setters are wrapped on the element). Dirty is also
+  re-read on `focusin`/`focusout` of the form and on `beforeunload` (with
+  `warnUnsaved`). Limits, since there is no polling: `option.selected = true`
+  is not seen; an uncontrolled input written from code is picked up at the
+  next focus change, reset, submit or page leave, not at once (the counter
+  shows only while focused or near the limit, so that is invisible, but
+  `data-dirty` can lag until then).
+
 - **Number inputs and React.** Setting `input.value` from code goes through
   React's value tracker and the following `input` event is swallowed.
   `setNativeValue` calls the prototype's setter so scrubbing and steppers
@@ -99,7 +129,11 @@ bun run build            # registry + static demo
 
 ## Project Status
 
-v0.1. The full gate (`bun run test`) is green: 33 tests, zero lint warnings,
-zero typecheck errors. Not yet published: the install URL points at
+v0.1. The full gate (`bun run test`) is green: 61 tests, zero lint warnings,
+zero typecheck errors (default and strict). Correctness audit items fixed:
+double submit, action errors surviving reset, ref merging, value from
+controls, disabled, programmatic writes, `step="any"`, strict TS. Left open
+from the audit: `errors` still block a resubmit until the field is edited (a
+product decision, covered by a test); P2 #10 to #13 and the P3 list. Not yet published: the install URL points at
 `public/r/dilekce.json` on the `main` branch of
 `github.com/productdevbook/dilekce`, which doesn't exist yet.

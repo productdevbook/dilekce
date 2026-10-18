@@ -29,6 +29,19 @@ npx shadcn@latest add https://raw.githubusercontent.com/productdevbook/dilekce/m
 
 That writes `components/ui/dilekce.tsx` and installs `cn`.
 
+## Requirements
+
+- **React 19.** Components take `ref` as a plain prop, which React 18 drops
+  silently. There is no `forwardRef` fallback.
+- **Tailwind CSS v4.** The classes use v4 syntax (`data-*` variants,
+  `has-*`, `@container`, arbitrary properties) and your theme's shadcn tokens.
+- **[`cn`](https://github.com/shadcn-ui/cn).** It is what shadcn 4 writes to
+  `lib/utils.ts` (`export { cn } from "cn"`), so a project created or migrated
+  with the current CLI already has it. A project still on `clsx` +
+  `tailwind-merge` gets the `cn` package added as one more dependency and
+  works, but ends up with two implementations. Run
+  `npx shadcn@latest migrate cn` to move the whole project onto `cn`.
+
 ## Usage
 
 ```tsx
@@ -180,6 +193,8 @@ attention", "3 fields need attention"). `onInvalidSubmit` gets their names:
 
 Pass `errors`, keyed by field name. A field's error clears as soon as the user
 edits it, blocks the submit until then, and a new object replaces the set.
+Errors you pass in survive the form reset React 19 runs after a function
+action, so they work with `useActionState`; a reset button still clears them.
 
 ```tsx
 const [errors, setErrors] = useState<DilekceErrors>()
@@ -202,6 +217,12 @@ Give the field its message with `error`. While it's set the field is invalid,
   <DilekceInput {...register("email")} />
 </DilekceField>
 ```
+
+`register`'s `ref` and a ref of your own are merged with the ones dilekçe keeps
+(on the form, a field, a number and a select), so steppers, scrubbing, dirty
+and the empty state keep working. Values written from code, such as
+`setValue`, are picked up on the next focus change, reset or submit; a
+controlled `value` is followed at once.
 
 ## Affixes and counter
 
