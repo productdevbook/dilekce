@@ -606,6 +606,61 @@ describe("custom rules", () => {
   })
 })
 
+describe("a name on the control, not the field", () => {
+  const options = [
+    { value: "a", label: "A" },
+    { value: "b", label: "B" },
+  ]
+
+  const prevent = (event: React.FormEvent) => event.preventDefault()
+
+  test("a radio group's rule gets the checked radio", async () => {
+    const validate = vi.fn(() => null)
+    const screen = await render(
+      <Dilekce onSubmit={prevent}>
+        <DilekceField label="Pick" validate={validate}>
+          <DilekceRadioGroup name="pick" defaultValue="b" options={options} />
+        </DilekceField>
+        <button type="submit">Save</button>
+      </Dilekce>,
+    )
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect(validate).toHaveBeenCalledWith("b", expect.any(FormData))
+  })
+
+  test("a checkbox group's rule gets only the checked boxes", async () => {
+    const validate = vi.fn(() => null)
+    const screen = await render(
+      <Dilekce onSubmit={prevent}>
+        <DilekceField label="Pick" validate={validate}>
+          <DilekceCheckboxGroup name="pick" defaultValue={["b"]} options={options} />
+        </DilekceField>
+        <button type="submit">Save</button>
+      </Dilekce>,
+    )
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect(validate).toHaveBeenCalledWith(["b"], expect.any(FormData))
+  })
+
+  test("a field and its control may carry different names", async () => {
+    const validate = vi.fn(() => null)
+    const screen = await render(
+      <Dilekce onSubmit={prevent} errors={{ control: "Taken" }}>
+        <DilekceField name="field" label="Pick" validate={validate}>
+          <DilekceInput name="control" defaultValue="hello" />
+        </DilekceField>
+        <button type="submit">Save</button>
+      </Dilekce>,
+    )
+    // Server errors find the field by the control's name as well.
+    expect(errorOf("control")).toBe("Taken")
+    await userEvent.type($("[name=control]"), "!")
+    expect(errorOf("control")).toBeNull()
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect(validate).toHaveBeenCalledWith("hello!", expect.any(FormData))
+  })
+})
+
 describe("affixes and counter", () => {
   test("leading and trailing text sit inside the cell, around the value", async () => {
     await render(

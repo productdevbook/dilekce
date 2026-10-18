@@ -277,6 +277,22 @@ function nextControl(form: HTMLFormElement, from: HTMLElement) {
   )
 }
 
+/**
+ * What a field holds, read from its controls: the checked boxes of a checkbox
+ * group, the checked radio, or the text of the first control. Disabled
+ * controls don't count, like in FormData. Reading the controls rather than the
+ * field's `name` means a name that lives on the control works too.
+ */
+function valueOf(field: HTMLElement): string | string[] {
+  const group = field.querySelector("[data-slot=dilekce-choices]")
+  const picked = [...field.querySelectorAll<HTMLInputElement>("input:checked:not(:disabled)")]
+  if (group?.getAttribute("role") === "group") return picked.map((input) => input.value)
+  const control = controlOf(field)
+  if (!control || control.type === "file") return ""
+  if (control.type === "radio" || control.type === "checkbox") return picked[0]?.value ?? ""
+  return control.value
+}
+
 /** The message a field's control earns right now, or null when it's valid. */
 function readValidity(field: HTMLElement, messages: DilekceMessages): string | null {
   // Native constraint validation has no "at least one" for checkboxes.
@@ -730,7 +746,10 @@ function DilekceField({
   const [count, setCount] = React.useState<{ length: number; max: number } | null>(null)
   const [copied, setCopied] = React.useState(false)
 
-  const formError = name ? firstOf(form?.errors[name]) : undefined
+  // The name the field's controls carry, which may be theirs and not the field's.
+  const [controlName, setControlName] = React.useState<string>()
+  const errorKey = [name, controlName].find((key) => key && form?.errors[key] != null)
+  const formError = errorKey ? firstOf(form?.errors[errorKey]) : undefined
   const external = hasContent(error) ? error : formError
   const message: React.ReactNode = hasContent(external) ? external : native
   const invalid = hasContent(message)
@@ -743,10 +762,13 @@ function DilekceField({
   )
 
   // Latest values for the handle and checks, which run outside a render.
-  const latest = React.useRef({ external, all, validate, name })
+  const latest = React.useRef({ external, all, validate })
   React.useLayoutEffect(() => {
-    latest.current = { external, all, validate, name }
+    latest.current = { external, all, validate }
   })
+  React.useLayoutEffect(() => {
+    setControlName(controlOf(fieldRef.current)?.name || undefined)
+  }, [children, name])
 
   /*
    * Constraint validation first, then the field's own rule. An async rule
@@ -756,7 +778,7 @@ function DilekceField({
   const check = React.useCallback((): string | null | Promise<string | null> => {
     const field = fieldRef.current
     if (!field) return null
-    const { all, validate, name } = latest.current
+    const { all, validate } = latest.current
     const token = ++run.current
     const found = readValidity(field, all)
     if (found || !validate) {
@@ -765,11 +787,7 @@ function DilekceField({
       return found
     }
     const data = new FormData(field.closest("form") ?? undefined)
-    const group = field.querySelector("[data-slot=dilekce-choices][role=group]")
-    const values = name
-      ? data.getAll(name).filter((v): v is string => typeof v === "string")
-      : [controlOf(field)?.value ?? ""]
-    const value = group ? values : (values[0] ?? "")
+    const value = valueOf(field)
     const asMessage = (result: ValidatorResult) =>
       typeof result === "string" && result !== "" ? result : null
 
@@ -895,7 +913,7 @@ function DilekceField({
         onChange={(event) => {
           setDirty(true)
           readCount()
-          if (name && hasContent(formError)) form?.clearError(name)
+          if (errorKey && hasContent(formError)) form?.clearError(errorKey)
           // Once a message is showing, it follows the value live.
           if (native) void check()
           onChange?.(event)
