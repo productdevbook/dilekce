@@ -40,5 +40,40 @@ jobs:
       - name: 🚀 Build
         run: bun run build
       # The committed registry JSON must match the source it's built from
+      # (porcelain also catches untracked and deleted files)
       - name: 🧾 Registry up to date
-        run: git diff --exit-code public/r
+        run: |
+          bun run registry:build
+          test -z "$(git status --porcelain public/r)" || { git status --porcelain public/r; git diff public/r; exit 1; }
+
+  install:
+    name: Install into a fresh Vite project
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: 📦 Install dependencies
+        run: bun install --frozen-lockfile
+      - name: 🧾 Build registry
+        run: bun run registry:build
+      - name: 🌐 Serve registry
+        run: |
+          python3 -m http.server 8765 --directory public > "$RUNNER_TEMP/serve.log" 2>&1 &
+          for i in $(seq 1 20); do curl -sf http://localhost:8765/r/dilekce.json -o /dev/null && exit 0; sleep 0.5; done
+          cat "$RUNNER_TEMP/serve.log"; exit 1
+      - name: 🆕 Create a shadcn Vite project
+        run: npx --yes shadcn@latest init -t vite -b radix -n app -y -d --cwd "$RUNNER_TEMP"
+      - name: ➕ Add dilekce
+        working-directory: ${{ runner.temp }}/app
+        run: npx --yes shadcn@latest add http://localhost:8765/r/dilekce.json -y
+      - name: 🔍 Typecheck
+        working-directory: ${{ runner.temp }}/app
+        run: npx tsc -b
+      - name: 🚀 Build
+        working-directory: ${{ runner.temp }}/app
+        run: npx vite build
