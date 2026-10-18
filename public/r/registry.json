@@ -1,0 +1,20 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "dilekce",
+  "homepage": "https://github.com/productdevbook/dilekce",
+  "items": [
+    {
+      "name": "dilekce",
+      "type": "registry:ui",
+      "title": "Dilekçe",
+      "description": "Dense, paper-style grid forms: every field is a cell, errors sit inside it, and the same form renders filled in like a completed document.",
+      "dependencies": ["cn"],
+      "files": [
+        {
+          "path": "registry/dilekce/dilekce.tsx",
+          "type": "registry:ui"
+        }
+      ]
+    }
+  ]
+}
