@@ -297,6 +297,26 @@ with a class:
 its bottom. Every part carries a `data-slot` (`dilekce-field`,
 `dilekce-label`, `dilekce-error`, …) for targeting from your own CSS.
 
+## Accessibility
+
+- Every control is named by its label; radio and checkbox groups are named
+  groups. A checkbox group's `required` is read as "Required" in its
+  description (`aria-required` isn't valid on a group), and read-only is set
+  on each checkbox.
+- Field messages (on blur, live, "Checking…", "Copied", errors you pass in)
+  are read through one polite live region per form, with the field's label,
+  once per change. A failed submit says how many fields need attention and
+  focuses the first.
+- Affixes (`kg`, `$`) are part of the control's description. The −/+ steppers
+  are named with the field ("Decrease Weight"); the arrow keys step the input.
+- Windows High Contrast (`forced-colors`): cells get real borders, the focused
+  cell an outline, checked radios and checkboxes the `Highlight` color.
+- Tints are mixed against `--background`, so small text on an invalid or
+  hovered cell stays at 4.5:1 or more in the stock shadcn neutral theme, light
+  and dark. Focus indicators use `--primary` (3:1 or more), not `--ring`.
+- `prefers-reduced-motion` turns transitions and the pulse off.
+- Turkish messages: set `lang="tr"` on the form, so they're read with the right voice.
+
 ## Develop
 
 ```sh

@@ -129,11 +129,31 @@ bun run build            # registry + static demo
 
 ## Project Status
 
-v0.1. The full gate (`bun run test`) is green: 61 tests, zero lint warnings,
+v0.1. The full gate (`bun run test`) is green: 81 tests, zero lint warnings,
 zero typecheck errors (default and strict). Correctness audit items fixed:
 double submit, action errors surviving reset, ref merging, value from
-controls, disabled, programmatic writes, `step="any"`, strict TS. Left open
-from the audit: `errors` still block a resubmit until the field is edited (a
-product decision, covered by a test); P2 #10 to #13 and the P3 list. Not yet published: the install URL points at
-`public/r/dilekce.json` on the `main` branch of
+controls, disabled, programmatic writes, `step="any"`, strict TS. Accessibility
+audit P1 #12 to #15 and the P2/P3 items fixed (forced colors, opaque tints,
+one polite live region per form, checkbox group semantics, named 24px steppers
+that also work on click, 24px copy button, affixes in the description, focus
+outlines on `--dk-focus`, reduced motion); evidence in `docs/audit/a11y.md`,
+tests in the "accessibility" blocks at the end of `test/dilekce.test.tsx`
+(forced colors and reduced motion are emulated through `cdp()`). Left open:
+`errors` still block a resubmit until the field is edited (a product decision,
+covered by a test); P1 #16 to #22 (features), the a11y P3 items F4, F10, F12
+(`lang` is the app's job) and F13 (demo). Not yet published: the install URL
+points at `public/r/dilekce.json` on the `main` branch of
 `github.com/productdevbook/dilekce`, which doesn't exist yet.
+
+### Accessibility notes
+
+- **`outline-none` kills a later `outline-2`** in Tailwind v4 (it sets
+  `--tw-outline-style: none`); a part that has both needs `outline-solid` on
+  the focus state. The radio/checkbox marks had no outline of their own until
+  this was fixed.
+- **Translucent tints over the grid.** Never use `bg-x/NN` on a cell: the form's
+  `bg-border` shows through. Mix against `--background` with `color-mix`. The
+  invalid text color is `--dk-danger` (destructive mixed with foreground).
+- **Announcements** are queued and flushed in one timeout, so several fields
+  changing at once read as one sentence list; a submit stays quiet per field
+  (`check(true)`) because the count and the focus move say it.
