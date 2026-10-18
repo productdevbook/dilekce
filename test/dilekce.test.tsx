@@ -3499,6 +3499,13 @@ describe("file input", () => {
     probe.className = "border-input bg-background text-foreground"
     document.body.append(probe)
     const tokens = style(probe)
+    // The button eases its colors in (transition-colors), and a slow machine reads them mid-way, as
+    // oklab. Wait for the transition to settle rather than racing it.
+    await vi.waitFor(() => {
+      expect(button.backgroundColor).toBe(tokens.backgroundColor)
+      expect(button.borderTopColor).toBe(tokens.borderTopColor)
+      expect(button.color).toBe(tokens.color)
+    })
     expect(button.borderTopWidth).toBe("1px")
     expect(button.borderTopColor).toBe(tokens.borderTopColor)
     expect(button.backgroundColor).toBe(tokens.backgroundColor)
