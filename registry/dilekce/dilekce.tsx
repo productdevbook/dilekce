@@ -25,6 +25,7 @@ export type DilekceMessageKey =
   | "rowAdded"
   | "rowRemoved"
   | "change"
+  | "checkFailed"
 export type DilekceMessages = Partial<Record<DilekceMessageKey, string>>
 /** Errors from outside the browser, such as a server: field name → message. */
 export type DilekceErrors = Record<string, string | string[] | null | undefined>
@@ -210,6 +211,7 @@ export const dilekceMessages = {
     rowAdded: "Row {index} added",
     rowRemoved: "Row {index} removed",
     change: "Change",
+    checkFailed: "Couldn't check the form, try again",
   },
   tr: {
     valueMissing: "Zorunlu",
@@ -233,6 +235,7 @@ export const dilekceMessages = {
     rowAdded: "{index}. satır eklendi",
     rowRemoved: "{index}. satır kaldırıldı",
     change: "Değiştir",
+    checkFailed: "Form denetlenemedi, tekrar deneyin",
   },
 } satisfies Record<string, DilekceMessages>
 
@@ -261,13 +264,17 @@ interface Failure {
   field: HTMLElement
   label: string
   message: string
+  /** The field's own rule threw or rejected: nothing is wrong with the value, but it can't be vouched for. */
+  broken?: true
 }
 
 /** What the schema made of the form's values. */
 interface SchemaOutcome {
-  /** The parsed output; the plain values when the schema threw. */
+  /** The schema's parsed output; undefined when it found issues or couldn't run. */
   value: unknown
   issues: Array<{ key: string; message: string }>
+  /** The schema threw or rejected: the form can't be checked, so it isn't submitted. */
+  failed?: true
   /** The first message for each field name the issues address. */
   messages: Map<string, string>
 }
@@ -348,7 +355,7 @@ interface FormContextValue {
   /** Runs the schema over the form's values now; null without a schema. */
   runSchema: () => SchemaRun
   /** A field's message changed: the summary follows (null: it's valid now). */
-  reportField: (field: HTMLElement | null, message: string | null) => void
+  reportField: (field: HTMLElement | null, message: string | null, label?: string) => void
   /** Applies `defaultValues` to the controls under `root`, e.g. a field that mounted late. */
   applyDefaults: (root: ParentNode) => void
   /** How many rows `defaultValues` holds for a repeater's name; undefined when it says nothing. */
@@ -690,6 +697,12 @@ function readValues(form: HTMLFormElement): DilekceValues {
       flat.set(el.name, el.value)
     }
   }
+  // A repeater with no rows has no control to read: it is an empty list, not missing.
+  for (const list of form.querySelectorAll<HTMLElement>("[data-slot=dilekce-repeat][data-name]")) {
+    const name = list.dataset.name
+    if (!name || list.querySelector(":scope > [data-slot=dilekce-repeat-row]")) continue
+    if (!list.closest("fieldset:disabled") && !flat.has(name)) flat.set(name, [])
+  }
   const values: DilekceValues = {}
   for (const [name, value] of flat) nest(values, name, value)
   return values
@@ -807,6 +820,8 @@ function applyDefaultValues(
 ) {
   for (const el of controls) {
     if (!isFormControl(el) || !el.name || el.hasAttribute("data-controlled")) continue
+    // A row added later starts empty: its index would otherwise borrow another row's defaults.
+    if (el.closest("[data-slot=dilekce-repeat-row]:not([data-initial])")) continue
     // A file input can't be given a file from markup: a default would only pretend one was chosen.
     if (el instanceof HTMLInputElement && el.type === "file") continue
     if (!values.has(el.name)) {
@@ -1087,7 +1102,7 @@ function Dilekce<S extends StandardSchemaV1 | undefined = undefined>({
     [summary],
   )
   const reportField = React.useCallback(
-    (field: HTMLElement | null, message: string | null) => {
+    (field: HTMLElement | null, message: string | null, label?: string) => {
       if (!field) return
       summary.update((state) => {
         const index = state.items.findIndex((item) => item.field === field)
@@ -1096,10 +1111,15 @@ function Dilekce<S extends StandardSchemaV1 | undefined = undefined>({
         if (message === null) {
           return { ...state, items: state.items.filter((_, at) => at !== index) }
         }
-        if (message === "" || message === item.message) return state
+        // The label can change under a line (a repeater renumbering its rows).
+        const nextLabel = label ?? item.label
+        const nextMessage = message === "" ? item.message : message
+        if (nextMessage === item.message && nextLabel === item.label) return state
         return {
           ...state,
-          items: state.items.map((it, at) => (at === index ? { ...it, message } : it)),
+          items: state.items.map((it, at) =>
+            at === index ? { ...it, message: nextMessage, label: nextLabel } : it,
+          ),
         }
       })
     },
@@ -1110,27 +1130,46 @@ function Dilekce<S extends StandardSchemaV1 | undefined = undefined>({
    * The schema runs over the values built from the form. Issues are matched to
    * fields by name; those no enabled field answers for are form-level.
    */
+  const merged = React.useMemo(() => ({ ...dilekceMessages.en, ...messages }), [messages])
+  const checkFailed = merged.checkFailed ?? dilekceMessages.en.checkFailed
   const schemaRef = React.useRef(schema)
   React.useInsertionEffect(() => {
     schemaRef.current = schema
   })
   // Only the newest run may refresh the summary's form-level lines.
   const schemaRun = React.useRef(0)
-  const unclaimed = React.useCallback((outcome: SchemaOutcome) => {
-    const claimed = new Set<string>()
-    for (const field of fields.current) for (const name of field.names()) claimed.add(name)
-    return outcome.issues.filter((issue) => !claimed.has(issue.key)).map((issue) => issue.message)
-  }, [])
+  const unclaimed = React.useCallback(
+    (outcome: SchemaOutcome) => {
+      const claimed = new Set<string>()
+      for (const field of fields.current) for (const name of field.names()) claimed.add(name)
+      const lines = outcome.issues
+        .filter((issue) => !claimed.has(issue.key))
+        .map((issue) => issue.message)
+      return outcome.failed ? [...lines, checkFailed] : lines
+    },
+    [checkFailed],
+  )
   const runSchema = React.useCallback((): SchemaRun => {
     const standard = schemaRef.current?.["~standard"]
     const form = formRef.current
     if (!standard || !form) return null
     const values = readValues(form)
     const token = ++schemaRun.current
-    // A schema that throws can't vouch for the values; like a rule, it doesn't block.
-    const unchecked: SchemaOutcome = { value: values, issues: [], messages: new Map() }
+    // A schema that throws or rejects can't vouch for the values: nothing is
+    // submitted, as `onValidSubmit` promises the parsed output. The form says so
+    // and stays usable for another try.
+    const unchecked: SchemaOutcome = {
+      value: undefined,
+      issues: [],
+      failed: true,
+      messages: new Map(),
+    }
     const outcomeOf = (result: StandardSchemaV1.Result<unknown>): SchemaOutcome => {
-      if (!result.issues) return { value: result.value, issues: [], messages: new Map() }
+      // `issues: []` is a success too, though the spec leaves it out.
+      if (!result.issues?.length) {
+        const { value } = result as StandardSchemaV1.SuccessResult<unknown>
+        return { value, issues: [], messages: new Map() }
+      }
       const issues = result.issues.map((issue) => ({
         key: pathKey(issue.path),
         message: issue.message,
@@ -1156,16 +1195,15 @@ function Dilekce<S extends StandardSchemaV1 | undefined = undefined>({
     try {
       result = standard.validate(values)
     } catch {
-      return unchecked
+      return refresh(unchecked)
     }
     if (!isThenable<StandardSchemaV1.Result<unknown>>(result)) return refresh(outcomeOf(result))
     return Promise.resolve(result).then(
       (resolved) => refresh(outcomeOf(resolved)),
-      () => unchecked,
+      () => refresh(unchecked),
     )
   }, [summary, unclaimed])
 
-  const merged = React.useMemo(() => ({ ...dilekceMessages.en, ...messages }), [messages])
   const context = React.useMemo<FormContextValue>(
     () => ({
       mode,
@@ -1249,9 +1287,17 @@ function Dilekce<S extends StandardSchemaV1 | undefined = undefined>({
     }
   }, [])
 
-  const fail = (failures: Failure[], outcome: SchemaOutcome | null) => {
+  // A schema that found issues or couldn't run stops the submit.
+  const stops = (outcome: SchemaOutcome | null) =>
+    outcome != null && (outcome.failed === true || outcome.issues.length > 0)
+
+  const fail = (found: Failure[], outcome: SchemaOutcome | null) => {
+    // A rule that couldn't run isn't a line of its own: the form says it couldn't check.
+    const failures = found.filter((failure) => !failure.broken)
     failures.sort((a, b) => inDocumentOrder(a.control, b.control))
     let formLevel = outcome ? unclaimed(outcome) : []
+    const unchecked = found.some((failure) => failure.broken) || outcome?.failed === true
+    if (unchecked && !formLevel.includes(checkFailed)) formLevel = [...formLevel, checkFailed]
     // Issues all addressed to fields that showed nothing: still say something.
     if (outcome && failures.length === 0 && formLevel.length === 0) {
       formLevel = outcome.issues.map((issue) => issue.message)
@@ -1268,9 +1314,10 @@ function Dilekce<S extends StandardSchemaV1 | undefined = undefined>({
     }))
     // With a summary, it takes focus; without one, the first invalid field does.
     if (!summary.hasSummary()) failures[0]?.control.focus()
-    const count = failures.length + formLevel.length
-    const text =
+    const count = failures.length + formLevel.length - (unchecked ? 1 : 0)
+    const counted =
       count === 1 ? merged.invalidOne : merged.invalidMany?.replace("{count}", String(count))
+    const text = [unchecked && checkFailed, count > 0 && counted].filter(Boolean).join(". ")
     // A trailing zero-width space toggles, so a repeat of the same text is read again.
     setAnnouncement((last) => (last === text ? `${text}\u200b` : (text ?? "")))
     const form = formRef.current
@@ -1336,7 +1383,7 @@ function Dilekce<S extends StandardSchemaV1 | undefined = undefined>({
           const results = [...fields.current].map((field) => field.validate(outcome))
           if (!results.some(isThenable) && !isThenable(outcome)) {
             const invalid = results.filter((failure): failure is Failure => failure != null)
-            if (invalid.length > 0 || (outcome && outcome.issues.length > 0)) {
+            if (invalid.length > 0 || stops(outcome)) {
               event.preventDefault()
               fail(invalid, outcome)
               return
@@ -1357,7 +1404,7 @@ function Dilekce<S extends StandardSchemaV1 | undefined = undefined>({
             checkingRef.current = null
             setChecking(false)
             const invalid = failures.filter((failure): failure is Failure => failure != null)
-            if (invalid.length > 0 || (resolved && resolved.issues.length > 0)) {
+            if (invalid.length > 0 || stops(resolved)) {
               fail(invalid, resolved)
               return
             }
@@ -1654,6 +1701,7 @@ function DilekceRepeat({
     <div
       ref={mergedRef}
       data-slot="dilekce-repeat"
+      data-name={name}
       data-count={count}
       className={cn("flex flex-col gap-px forced-colors:gap-0", className)}
       {...props}
@@ -1663,7 +1711,13 @@ function DilekceRepeat({
           key={key}
           value={{ index, remove: () => removeAt(key), canRemove: count > min }}
         >
-          <div data-slot="dilekce-repeat-row" data-index={index} className="contents">
+          <div
+            data-slot="dilekce-repeat-row"
+            data-index={index}
+            // Only the rows the form started (or was reset) with take `defaultValues`.
+            data-initial={pristine.current.includes(key) ? "" : undefined}
+            className="contents"
+          >
             {children({
               index,
               key: String(key),
@@ -1707,15 +1761,40 @@ function DilekceRepeat({
  * "Remove row N". Put it last in the `DilekceRow`. Disabled at the repeater's
  * `min`; not shown in filled mode or print.
  */
-function DilekceRepeatRemove({ className, ...props }: React.ComponentProps<"div">) {
+function DilekceRepeatRemove({ className, ref, ...props }: React.ComponentProps<"div">) {
   const row = React.useContext(RepeatRowContext)
   const messages = useForm()?.messages ?? dilekceMessages.en
+  const cellRef = React.useRef<HTMLDivElement>(null)
+  const mergedRef = useMergedRef(cellRef, ref)
+  const present = row != null
+
+  // The cell is as wide as its button. When the row wraps it onto a line of its
+  // own, it grows to fill that line, so no gap of grid color is left beside it.
+  // Whether it wrapped is read from the layout, as CSS can't ask.
+  React.useLayoutEffect(() => {
+    const cell = cellRef.current
+    const line = cell?.parentElement
+    if (!cell || !line) return
+    const read = () => {
+      const before = cell.previousElementSibling
+      const alone =
+        before != null && cell.getBoundingClientRect().top > before.getBoundingClientRect().top + 1
+      cell.toggleAttribute("data-alone", alone)
+    }
+    read()
+    const observer = new ResizeObserver(read)
+    observer.observe(line)
+    observer.observe(cell)
+    return () => observer.disconnect()
+  }, [present])
+
   if (!row) return null
   return (
     <div
+      ref={mergedRef}
       data-slot="dilekce-repeat-remove"
       className={cn(
-        "flex flex-none items-end bg-background px-(--dk-px) py-(--dk-py) group-data-[mode=filled]/dilekce:hidden forced-colors:border forced-colors:border-[CanvasText] @max-[30rem]/dilekce:grow print:hidden",
+        "flex flex-none items-end bg-background px-(--dk-px) py-(--dk-py) group-data-[mode=filled]/dilekce:hidden forced-colors:border forced-colors:border-[CanvasText] data-alone:grow print:hidden",
         className,
       )}
       {...props}
@@ -1866,6 +1945,8 @@ const FIELD = [
   "data-invalid:[--dk-danger:color-mix(in_oklch,var(--destructive)_85%,var(--foreground))]",
   "hover:bg-[color-mix(in_oklch,var(--accent)_50%,var(--background))] focus-within:bg-accent focus-within:shadow-[inset_0_-2px_0_var(--dk-focus)]",
   "group-data-[focus=ring]/dilekce:focus-within:shadow-[inset_0_0_0_2px_var(--dk-focus)]",
+  // The cell's own background as a token, for the fade behind the filled-mode actions.
+  "[--dk-cell:var(--background)] data-invalid:[--dk-cell:color-mix(in_oklch,var(--destructive)_5%,var(--background))]",
   "data-invalid:bg-[color-mix(in_oklch,var(--destructive)_5%,var(--background))] data-invalid:hover:bg-[color-mix(in_oklch,var(--destructive)_8%,var(--background))] data-invalid:focus-within:bg-[color-mix(in_oklch,var(--destructive)_10%,var(--background))]",
   "has-[select]:cursor-default has-[:is(input,select,textarea):disabled]:cursor-not-allowed has-[:is(input,select,textarea):disabled]:opacity-55",
   // Radios and checkboxes never wrap inside a cell: the cell refuses to shrink
@@ -1990,6 +2071,8 @@ function DilekceField({
     controller.current?.abort()
     controller.current = null
   }, [])
+  // The newest check's rule threw or rejected: the field can't vouch for its value.
+  const broken = React.useRef(false)
   // The value the message on show was last worked out for.
   const checked = React.useRef("")
   // Said last through the live region, so a message that stays the same isn't repeated.
@@ -2007,6 +2090,7 @@ function DilekceField({
       if (!field) return null
       const { all, validate } = latest.current
       const token = ++run.current
+      broken.current = false
       // A newer check cancels the one still running.
       cancel()
       checked.current = JSON.stringify(valueOf(field))
@@ -2049,7 +2133,14 @@ function DilekceField({
       const value = valueOf(field)
       const abort = new AbortController()
       controller.current = abort
-      const result = validate(value, data, { signal: abort.signal })
+      let result: ValidatorResult | Promise<ValidatorResult>
+      try {
+        result = validate(value, data, { signal: abort.signal })
+      } catch {
+        // A rule that throws can't vouch for the value: the submit stops.
+        broken.current = true
+        return (newest.current = show(null))
+      }
       if (!isThenable<ValidatorResult>(result))
         return (newest.current = bySchema(asMessage(result)))
       setPending(true)
@@ -2057,8 +2148,9 @@ function DilekceField({
       return (newest.current = Promise.resolve(result).then(
         (resolved) => (token !== run.current ? newest.current : bySchema(asMessage(resolved))),
         () => {
-          // A rule that throws can't vouch for the value; it doesn't block it either.
+          // A rule that rejects can't vouch for the value: the submit stops.
           if (token !== run.current) return newest.current
+          broken.current = true
           setPending(false)
           return null
         },
@@ -2100,6 +2192,9 @@ function DilekceField({
         const blocked = (message: string | null): Failure | null => {
           const { external } = latest.current
           const control = controlOf(field)
+          if (control && broken.current && !(hasContent(external) || message)) {
+            return { control, field, label: "", message: "", broken: true }
+          }
           if (!control || !(hasContent(external) || message)) return null
           // The message on show: the app's own wins over the field's.
           const shown = hasContent(external) ? external : message
@@ -2159,14 +2254,16 @@ function DilekceField({
    * line, a field that turns valid (or goes away) takes it off.
    */
   const reportField = form?.reportField
+  // After every render: the label can change on its own (a repeater renumbering
+  // its rows), and the summary line follows it.
   React.useLayoutEffect(() => {
     const shown = invalid
       ? typeof message === "string"
         ? message
         : (errorRef.current?.textContent?.trim() ?? "")
       : null
-    reportField?.(fieldRef.current, shown)
-  }, [invalid, message, reportField])
+    reportField?.(fieldRef.current, shown, labelRef.current?.textContent?.trim() ?? "")
+  })
   React.useLayoutEffect(() => {
     const field = fieldRef.current
     return () => reportField?.(field, null)
@@ -2359,7 +2456,16 @@ function DilekceField({
         {(copyable || changeable) && (
           <span
             data-slot="dilekce-field-actions"
-            className="-mt-1 inline-flex items-start gap-1 self-start justify-self-end [grid-area:error] print:hidden"
+            className={cn(
+              "-mt-1 inline-flex items-start gap-1 self-start justify-self-end [grid-area:error] print:hidden",
+              // A fine pointer can hover or focus, so the actions wait out of sight and, when
+              // shown, float over the label's end on a fade: the label keeps its width.
+              // Touch has no hover, so there they stay visible and in the cell's flow.
+              "pointer-fine:absolute pointer-fine:[grid-area:auto] pointer-fine:end-(--dk-px) pointer-fine:top-[max(0px,calc(var(--dk-py)-0.375rem))] pointer-fine:z-1 pointer-fine:m-0 pointer-fine:rounded-sm pointer-fine:bg-[linear-gradient(to_right,transparent,var(--dk-cell)_0.75rem)] pointer-fine:ps-3 pointer-fine:opacity-0 pointer-fine:transition-opacity pointer-fine:duration-150 motion-reduce:pointer-fine:transition-none",
+              "pointer-fine:group-hover/field:opacity-100 pointer-fine:group-focus-within/field:opacity-100",
+              // Nothing to copy and no Change: no box either.
+              NO_ACTIONS,
+            )}
           >
             {copyable && (
               <button
@@ -2367,10 +2473,10 @@ function DilekceField({
                 data-slot="dilekce-copy"
                 aria-labelledby={`${copyId} ${labelId}`}
                 className={cn(
-                  "inline-flex min-h-6 min-w-6 cursor-pointer items-center justify-center gap-1 rounded-sm px-1 font-mono text-(length:--dk-label) leading-[1.3] tracking-[0.02em] text-muted-foreground opacity-0 transition-opacity duration-150 motion-reduce:transition-none",
-                  "group-hover/field:opacity-100 hover:bg-foreground/8 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-(--dk-focus) pointer-coarse:opacity-100 data-copied:opacity-100",
+                  "inline-flex min-h-6 min-w-6 cursor-pointer items-center justify-center gap-1 rounded-sm px-1 font-mono text-(length:--dk-label) leading-[1.3] tracking-[0.02em] text-muted-foreground",
+                  "hover:bg-foreground/8 hover:text-foreground focus-visible:outline-2 focus-visible:outline-(--dk-focus)",
                   // Nothing to copy: an empty field, or a group with nothing chosen.
-                  "group-has-[:placeholder-shown]/field:hidden group-has-data-empty/field:hidden group-has-[[data-slot=dilekce-choices]]/field:group-not-has-checked/field:hidden group-has-[[data-slot=dilekce-toggle]]/field:group-not-has-checked/field:hidden",
+                  NOTHING_TO_COPY,
                   "print:hidden",
                 )}
                 data-copied={copied || undefined}
@@ -2466,6 +2572,14 @@ function DilekceField({
   )
 }
 
+/** Where Copy has nothing to copy: an empty field, or a group or toggle with nothing chosen. */
+const NOTHING_TO_COPY =
+  "group-has-[:placeholder-shown]/field:hidden group-has-data-empty/field:hidden group-has-[[data-slot=dilekce-choices]]/field:group-not-has-checked/field:hidden group-has-[[data-slot=dilekce-toggle]]/field:group-not-has-checked/field:hidden"
+
+/** The same, with no Change beside it: the actions box has nothing in it. (Literal, so Tailwind sees the classes.) */
+const NO_ACTIONS =
+  "group-has-[:placeholder-shown]/field:not-has-[[data-slot=dilekce-change]]:hidden group-has-data-empty/field:not-has-[[data-slot=dilekce-change]]:hidden group-has-[[data-slot=dilekce-choices]]/field:group-not-has-checked/field:not-has-[[data-slot=dilekce-change]]:hidden group-has-[[data-slot=dilekce-toggle]]/field:group-not-has-checked/field:not-has-[[data-slot=dilekce-change]]:hidden"
+
 const CHANGE = cn(
   "inline-flex min-h-6 min-w-6 cursor-pointer items-center justify-center rounded-sm px-1 font-mono text-(length:--dk-label) leading-[1.3] tracking-[0.02em] text-muted-foreground underline underline-offset-2",
   "hover:bg-foreground/8 hover:text-foreground focus-visible:outline-2 focus-visible:outline-(--dk-focus)",
@@ -2533,6 +2647,14 @@ export interface DilekceAffixProps {
   /** Shown after the value inside the cell: a unit, `kg`, `%`, `.com`. */
   trailing?: React.ReactNode | undefined
 }
+
+/**
+ * Filled: the control is only as wide as its value, so a trailing affix sits
+ * right after it ("1,5 kg") instead of at the far end of the cell. Where
+ * `field-sizing` isn't supported the control keeps filling the cell.
+ */
+const FILLED_FIT =
+  "supports-[field-sizing:content]:group-data-[mode=filled]/dilekce:w-auto supports-[field-sizing:content]:group-data-[mode=filled]/dilekce:flex-none supports-[field-sizing:content]:group-data-[mode=filled]/dilekce:field-sizing-content"
 
 const AFFIX = cn(
   "shrink-0 text-(length:--dk-text) leading-[1.4] whitespace-nowrap text-muted-foreground select-none",
@@ -2665,7 +2787,7 @@ function DilekceInput({
       className={cn(
         CONTROL_CLASS,
         picker && PICKER,
-        (leading != null || trailing != null) && "flex-1",
+        (leading != null || trailing != null) && ["flex-1", FILLED_FIT],
         className,
       )}
       style={
@@ -2721,10 +2843,7 @@ function DilekceTextarea({
   )
 }
 
-export interface DilekceSelectProps extends Omit<
-  React.ComponentProps<"select">,
-  "children" | "multiple"
-> {
+export interface DilekceSelectProps extends Omit<React.ComponentProps<"select">, "children"> {
   options: DilekceOption[]
   placeholder?: string | undefined
 }
@@ -2748,6 +2867,8 @@ function DilekceSelect({
   // <select> has no readOnly: filled mode guards it by hand instead.
   const { readOnly, ...selectControl } = useControl({ ...props, value })
   const [current, setCurrent] = React.useState(String(defaultValue ?? ""))
+  // A multiple select's default is a list; none is the empty one.
+  const fallback = props.multiple ? [] : ""
   const empty = (value === undefined ? current : String(value)) === ""
   const selectRef = React.useRef<HTMLSelectElement>(null)
   const mergedRef = useMergedRef(selectRef, ref)
@@ -2799,7 +2920,7 @@ function DilekceSelect({
         data-slot="dilekce-select"
         data-empty={empty || undefined}
         value={value}
-        defaultValue={value === undefined ? (defaultValue ?? "") : undefined}
+        defaultValue={value === undefined ? (defaultValue ?? fallback) : undefined}
         className={cn(
           CONTROL_CLASS,
           "cursor-[inherit] truncate pe-5 [appearance:none] data-empty:text-muted-foreground",
@@ -2980,7 +3101,9 @@ function DilekceNumber({
         placeholder={placeholder}
         className={cn(
           CONTROL_CLASS,
-          "flex-1 tabular-nums [-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
+          "flex-1 tabular-nums",
+          FILLED_FIT,
+          "[-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
           className,
         )}
         {...props}

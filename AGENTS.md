@@ -56,7 +56,10 @@ the spec, no dependency).
   once per submit; every field handle's `validate(schemaRun)` takes its issues
   by `pathKey` (path joined by "."). Stage order in `check()`: constraints,
   `validate`, schema. Issues no enabled field `names()` claims are form-level
-  (`unclaimed`). A throwing schema doesn't block. Blur/live run the whole
+  (`unclaimed`). A throwing or rejecting schema, or a field `validate` that throws or rejects, fails closed:
+  `SchemaOutcome.failed` / `Failure.broken`, no submit, form-level `checkFailed` line in the
+  summary + announcement + `onInvalidSubmit`; the next submit retries. `{ value, issues: [] }`
+  is success. `readValues` gives `[]` for a `[data-slot=dilekce-repeat][data-name]` with no rows. Blur/live run the whole
   schema and take the field's issues (pending flag only for a field checked
   alone; a submit shows `data-checking`).
 - `defaultValues`: flattened (`flattenDefaults`; a scalar list is kept whole and
@@ -69,7 +72,7 @@ the spec, no dependency).
   `form.reset()` with `selfReset` set, so the app's `onReset` isn't called.
 - `DilekceField`: `validate` (`(value, data) => message | null | undefined |
   false`, may be async; `pending` message, `data-pending`, submit held with
-  `data-checking`, newest run wins, a throwing rule doesn't block). Shows a
+  `data-checking`, newest run wins, a throwing/rejecting rule fails the submit closed). Shows a
   `n/max` counter for `maxLength`.
 - `DilekceInput`, `DilekceNumber`: `leading`, `trailing` affixes.
 - `DilekceCheckbox` / `DilekceSwitch` (one `Toggle`): a native checkbox in
@@ -127,12 +130,19 @@ the spec, no dependency).
   in a layout effect on every key change (dirty counts rows); the add/remove
   action ref drives focus + `announce`. Add cell is not rendered at `max`;
   `DilekceRepeatRemove` reads `RepeatRowContext`, disabled at `min`, grows to
-  full width under 30rem. Both hidden in filled mode and print.
+  full width under 30rem. Both hidden in filled mode and print. Only rows from the initial/reset keys carry
+  `data-initial` and take `defaultValues` (a row added later starts empty). The remove cell
+  gets `data-alone` (ResizeObserver) when it wraps onto its own line, and then grows.
+  Summary lines update their label from `reportField` (every Field render).
+- Filled mode affixes: the input gets `field-sizing: content` (`FILLED_FIT`, guarded by
+  `supports-`) so a trailing affix sits right after the value.
 - Check your answers (#20): `Dilekce` `onEdit` (context `canEdit`/`edit`) and
   `DilekceField` `edit` (string = `<a href>`, function = button, `false` =
   none) render `[data-slot=dilekce-change]` in the field's actions span
-  (`dilekce-field-actions`, with Copy; copy first). Change is always visible
-  (Copy is hover/focus/coarse only); named by `aria-labelledby` "Change <label>".
+  (`dilekce-field-actions`, with Copy; copy first). Copy and Change are one box
+  (`dilekce-field-actions`): for fine pointers it is absolute in the cell's top-right over a
+  `--dk-cell` fade, hidden until hover/focus-within, so labels keep their width; for coarse
+  pointers it stays in flow and visible (narrow half-width cells then truncate the label); named by `aria-labelledby` "Change <label>".
   `emptyText` is a real `span[data-slot=dilekce-empty]` shown by the same
   `:placeholder-shown`/`data-empty` conditions as the dash, which it
   suppresses (`after:content-none!`); `display:none` elsewhere, so it is
@@ -143,7 +153,7 @@ the spec, no dependency).
   file); use `await screen.unmount()`.
 - Message keys beyond validity: `pending`, `invalidOne`, `invalidMany`
   (`{count}`), `copy`, `copied`, `summaryTitle`, `add`, `remove`, `removeRow`,
-  `rowAdded`, `rowRemoved` (`{index}`, 1-based), `change`.
+  `rowAdded`, `rowRemoved` (`{index}`, 1-based), `change`, `checkFailed`.
 
 ## Build & Scripts
 
@@ -215,7 +225,8 @@ bun run build            # registry + static demo
 
 ## Project Status
 
-v0.1. The full gate (`bun run test`) is green: 243 tests, zero lint warnings,
+v0.1. The full gate (`bun run test`) is green: 264 tests (round 3 review fixes F1-F7 and the
+filled-mode design fixes are in `test/round3.test.tsx`), zero lint warnings,
 zero typecheck errors (default and strict). Correctness audit items fixed:
 double submit, action errors surviving reset, ref merging, value from
 controls, disabled, programmatic writes, `step="any"`, strict TS. Review round 1

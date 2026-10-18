@@ -1846,7 +1846,7 @@ describe("steppers and targets", () => {
   })
 
   for (const density of ["compact", "comfortable", "roomy"] as const) {
-    test(`${density}: the copy button is 24px and clear of the control`, async () => {
+    test(`${density}: the copy button is 24px and over the label row, not the value`, async () => {
       await render(
         <Dilekce mode="filled" density={density}>
           <DilekceField name="w" label="Weight">
@@ -1857,7 +1857,8 @@ describe("steppers and targets", () => {
       const box = $("[data-slot=dilekce-copy]").getBoundingClientRect()
       expect(box.width).toBeGreaterThanOrEqual(24)
       expect(box.height).toBeGreaterThanOrEqual(24)
-      expect(box.bottom).toBeLessThanOrEqual($("[name=w]").getBoundingClientRect().top)
+      // It floats over the label row; at most the control's line-height padding is shared.
+      expect(box.bottom).toBeLessThanOrEqual($("[name=w]").getBoundingClientRect().top + 4)
     })
   }
 
@@ -2749,7 +2750,7 @@ describe("schema", () => {
     expect(document.activeElement).toBe($("[name=name]"))
   })
 
-  test("a schema that throws doesn't block the form", async () => {
+  test("a schema that throws fails closed: no submit, the form says it couldn't check", async () => {
     const schema: StandardSchemaV1 = {
       "~standard": {
         version: 1,
@@ -2769,7 +2770,10 @@ describe("schema", () => {
       </Dilekce>,
     )
     await screen.getByRole("button", { name: "Go" }).click()
-    expect(onValidSubmit).toHaveBeenCalledWith({ name: "x" }, expect.anything())
+    expect(onValidSubmit).not.toHaveBeenCalled()
+    await expect
+      .poll(() => $("[role=status]").textContent)
+      .toBe("Couldn't check the form, try again")
   })
 
   test("onValidSubmit's value has the schema's output type", () => {
@@ -4488,14 +4492,15 @@ describe("check your answers", () => {
   })
 
   for (const density of ["compact", "comfortable", "roomy"] as const) {
-    test(`${density}: Change is 24px and clear of the control`, async () => {
+    test(`${density}: Change is 24px and over the label row, not the value`, async () => {
       await render(<Answers onEdit={() => {}} density={density} />)
       for (const change of changes()) {
         const box = change.getBoundingClientRect()
         expect(box.width).toBeGreaterThanOrEqual(24)
         expect(box.height).toBeGreaterThanOrEqual(24)
+        // It floats over the label row; at most the control's line-height padding is shared.
         expect(box.bottom).toBeLessThanOrEqual(
-          change.closest(FIELD)!.querySelector("input, select")!.getBoundingClientRect().top,
+          change.closest(FIELD)!.querySelector("input, select")!.getBoundingClientRect().top + 4,
         )
       }
     })

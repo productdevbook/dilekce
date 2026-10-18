@@ -68,6 +68,15 @@ const copy = {
     sms: "SMS updates",
     consentLabel: "Consent",
     consent: "I agree to the courier terms",
+    contentOptions: {
+      documents: "Documents",
+      clothing: "Clothing",
+      electronics: "Electronics",
+      food: "Food (non-perishable)",
+      other: "Other",
+    },
+    serviceOptions: { standard: "Standard", express: "Express", "same-day": "Same day" },
+    extraOptions: { insurance: "Insurance", signature: "Signature", fragile: "Fragile" },
   },
   tr: {
     sender: "Gönderici",
@@ -105,10 +114,23 @@ const copy = {
     sms: "SMS bildirimleri",
     consentLabel: "Onay",
     consent: "Kurye şartlarını kabul ediyorum",
+    contentOptions: {
+      documents: "Belgeler",
+      clothing: "Giysi",
+      electronics: "Elektronik",
+      food: "Gıda (dayanıklı)",
+      other: "Diğer",
+    },
+    serviceOptions: { standard: "Standart", express: "Ekspres", "same-day": "Aynı gün" },
+    extraOptions: { insurance: "Sigorta", signature: "İmza", fragile: "Kırılabilir" },
   },
 }
 
 type Lang = keyof typeof copy
+
+/** `{ value: label }` as the options a select, radio group or checkbox group takes. */
+const optionsOf = (labels: Record<string, string>) =>
+  Object.entries(labels).map(([value, label]) => ({ value, label }))
 
 /** Today as the date input writes it (local time, not UTC). */
 const today = () => new Date().toLocaleDateString("sv")
@@ -324,13 +346,7 @@ export function App() {
                       <DilekceSelect
                         required
                         placeholder={t.select}
-                        options={[
-                          { value: "documents", label: "Documents" },
-                          { value: "clothing", label: "Clothing" },
-                          { value: "electronics", label: "Electronics" },
-                          { value: "food", label: "Food (non-perishable)" },
-                          { value: "other", label: "Other" },
-                        ]}
+                        options={optionsOf(t.contentOptions)}
                       />
                     </DilekceField>
                     <DilekceRepeatRemove />
@@ -350,23 +366,10 @@ export function App() {
             <DilekceSection legend={t.delivery}>
               <DilekceRow>
                 <DilekceField name="service" label={t.service} span={2}>
-                  <DilekceRadioGroup
-                    required
-                    options={[
-                      { value: "standard", label: "Standard" },
-                      { value: "express", label: "Express" },
-                      { value: "same-day", label: "Same day" },
-                    ]}
-                  />
+                  <DilekceRadioGroup required options={optionsOf(t.serviceOptions)} />
                 </DilekceField>
                 <DilekceField name="extras" label={t.extras} span={2}>
-                  <DilekceCheckboxGroup
-                    options={[
-                      { value: "insurance", label: "Insurance" },
-                      { value: "signature", label: "Signature" },
-                      { value: "fragile", label: "Fragile" },
-                    ]}
-                  />
+                  <DilekceCheckboxGroup options={optionsOf(t.extraOptions)} />
                 </DilekceField>
               </DilekceRow>
               <DilekceRow>

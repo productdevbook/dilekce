@@ -176,7 +176,10 @@ carries `data-pending` and `aria-busy`. On submit the form waits
 the newest run sets the message, so a slow answer to an old value is dropped,
 and a submit uses each field's newest answer. A newer submit supersedes a check
 still running, so a rule that never settles can't leave the form stuck. A rule
-that throws doesn't block the field.
+that throws or rejects fails closed: the submit is stopped, the summary and the
+live region say "Couldn't check the form, try again" (the `checkFailed`
+message, also in `onInvalidSubmit` as a form-level entry), and the next submit
+runs the rule again.
 
 The rule gets a third argument, `{ signal }`: an `AbortSignal` that is aborted
 when a newer check of the field starts, the form resets or the field unmounts.
@@ -275,8 +278,12 @@ const Booking = z.object({
   reaches `onInvalidSubmit` with an empty `name` and `label`. Without a
   `DilekceSummary` it only reaches `onInvalidSubmit`.
 - An async schema works like an async `validate`: the field shows `pending`,
-  the submit is held, and the newest run wins. A schema that throws doesn't
-  block, like a rule that throws.
+  the submit is held, and the newest run wins. A schema that throws or rejects
+  fails closed like a rule does: nothing is submitted (`onValidSubmit` is
+  promised the parsed output, which doesn't exist), the form shows the
+  `checkFailed` message and stays usable for a retry. A result of
+  `{ value, issues: [] }` counts as success.
+- A repeater with no rows is `[]` under its name, so `z.array()` accepts it.
 - `onValidSubmit(value, event)` runs after `onSubmit` when the submit goes
   through, with the schema's parsed output (or, without a schema, the values
   object). `onSubmit` works as before.
@@ -469,8 +476,9 @@ values are still there, because `mode` is a prop on the same tree:
 A field's own `edit` overrides it: a string renders a link
 (`<a href>`, for a multi-page flow), a function a button, `false` hides it.
 `emptyText` replaces the dash of an empty field with real text, which screen
-readers read. Change is always visible (not only on hover) and, like Copy, is
-hidden in print.
+readers read. With a mouse, Change and Copy appear over the end of the label on
+hover or keyboard focus (so the label keeps its width); on touch they are
+always visible. Both are hidden in print.
 
 ## Repeating rows
 
