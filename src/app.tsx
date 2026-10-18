@@ -116,13 +116,13 @@ const copy = {
     consent: "Kurye şartlarını kabul ediyorum",
     contentOptions: {
       documents: "Belgeler",
-      clothing: "Giysi",
+      clothing: "Giyim",
       electronics: "Elektronik",
-      food: "Gıda (dayanıklı)",
+      food: "Gıda (bozulmayan)",
       other: "Diğer",
     },
     serviceOptions: { standard: "Standart", express: "Ekspres", "same-day": "Aynı gün" },
-    extraOptions: { insurance: "Sigorta", signature: "İmza", fragile: "Kırılabilir" },
+    extraOptions: { insurance: "Sigorta", signature: "İmza", fragile: "Kırılacak eşya" },
   },
 }
 
