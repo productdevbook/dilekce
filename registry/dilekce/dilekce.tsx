@@ -118,7 +118,10 @@ export declare namespace StandardSchemaV1 {
  * What `onValidSubmit` gets without a schema: the form's values by name. A
  * name is a string, or a `string[]` for several checkboxes of one name, a
  * checkbox group and a multiple select. Numbers stay strings (`z.coerce`);
- * a dotted name (`passengers.0.name`) nests into objects and arrays.
+ * a dotted name (`passengers.0.name`) nests into objects and arrays. A single
+ * checkbox or switch is its `value` ("on" unless set) when checked and absent
+ * when not; a file field is a `File` (absent when none was chosen), or a
+ * `File[]` with `multiple`.
  */
 export type DilekceValues = Record<string, unknown>
 
@@ -348,13 +351,13 @@ const useForm = () => React.useContext(FormContext)
 const useField = () => React.useContext(FieldContext)
 
 /** Renders the field's label as a <div> that names the group instead. */
-function useGroupLabel() {
+function useGroupLabel(enabled = true) {
   const setGroup = useField()?.setGroup
   React.useLayoutEffect(() => {
-    if (!setGroup) return
+    if (!setGroup || !enabled) return
     setGroup(true)
     return () => setGroup(false)
-  }, [setGroup])
+  }, [setGroup, enabled])
 }
 
 /**
@@ -415,7 +418,8 @@ function snapshot(form: HTMLFormElement) {
   return JSON.stringify(
     [...new FormData(form)].map(([key, value]) => [
       key,
-      typeof value === "string" ? value : value.name,
+      // A file by name, size and date, so choosing another one of the same name counts.
+      typeof value === "string" ? value : `${value.name}:${value.size}:${value.lastModified}`,
     ]),
   )
 }
@@ -434,13 +438,16 @@ function fingerprint(form: HTMLFormElement) {
           : [[el.id, index, [...el.selectedOptions].map((option) => option.value)]]
       }
       if (el instanceof HTMLTextAreaElement) return el.name ? [] : [[el.id, index, el.value]]
-      if (!(el instanceof HTMLInputElement) || el.name || ADVANCE_SKIP.has(el.type)) return []
+      if (!(el instanceof HTMLInputElement) || el.name) return []
+      if (ADVANCE_SKIP.has(el.type) && el.type !== "file") return []
       const checkable = el.type === "radio" || el.type === "checkbox"
       return [[el.id, index, checkable ? el.checked : el.value]]
     },
   )
   return snapshot(form) + JSON.stringify(unnamed)
 }
+
+const fileNames = (input: HTMLInputElement) => [...(input.files ?? [])].map((file) => file.name)
 
 /** What a filled-in field says, as text: the value a reader would copy. */
 function displayText(field: HTMLElement) {
@@ -450,10 +457,15 @@ function displayText(field: HTMLElement) {
       .map((input) => input.closest("label")?.textContent?.trim() ?? input.value)
       .join(", ")
   }
+  // A single checkbox or switch: its text when on, nothing when off.
+  const toggle = field.querySelector("[data-slot=dilekce-toggle]")
+  if (toggle) return toggle.querySelector("input:checked") ? (toggle.textContent?.trim() ?? "") : ""
   const control = field.querySelector<HTMLElement>(CONTROL)
   if (control instanceof HTMLSelectElement) {
     return control.value === "" ? "" : (control.selectedOptions[0]?.textContent?.trim() ?? "")
   }
+  if (control instanceof HTMLInputElement && control.type === "file")
+    return fileNames(control).join(", ")
   const value = (control as HTMLInputElement | null)?.value ?? ""
   if (value === "") return ""
   const affix = (slot: string) =>
@@ -537,7 +549,12 @@ function valueOf(field: HTMLElement): string | string[] {
   const control = [...field.querySelectorAll<HTMLInputElement>(CONTROL)].find(
     (el) => !isDisabled(el),
   )
-  if (!control || control.type === "file") return ""
+  if (!control) return ""
+  // The names; the files themselves are in the `data` a rule gets, and in the schema's values.
+  if (control.type === "file") {
+    const names = fileNames(control)
+    return control.multiple ? names : (names[0] ?? "")
+  }
   if (control.type === "radio" || control.type === "checkbox") return picked[0]?.value ?? ""
   return control.value
 }
@@ -608,7 +625,7 @@ function readValues(form: HTMLFormElement): DilekceValues {
       boxes.set(el.name, (boxes.get(el.name) ?? 0) + 1)
     }
   }
-  const flat = new Map<string, string | string[]>()
+  const flat = new Map<string, unknown>()
   for (const el of controls) {
     // A radio group without a name is named by the component to group its radios only.
     if (!el.name || el.hasAttribute("data-anonymous") || isDisabled(el)) continue
@@ -628,6 +645,12 @@ function readValues(form: HTMLFormElement): DilekceValues {
       }
     } else if (el.type === "radio") {
       if (el.checked) flat.set(el.name, el.value)
+    } else if (el.type === "file") {
+      // Files, not names: a File, or File[] for `multiple`. A single field with
+      // nothing chosen is left out, so the schema sees it missing.
+      const files = [...(el.files ?? [])]
+      if (el.multiple) flat.set(el.name, files)
+      else if (files[0]) flat.set(el.name, files[0])
     } else if (!VALUELESS.has(el.type) && !flat.has(el.name)) {
       flat.set(el.name, el.value)
     }
@@ -736,6 +759,8 @@ function applyDefaultValues(
 ) {
   for (const el of controls) {
     if (!isFormControl(el) || !el.name || el.hasAttribute("data-controlled")) continue
+    // A file input can't be given a file from markup: a default would only pretend one was chosen.
+    if (el instanceof HTMLInputElement && el.type === "file") continue
     if (!values.has(el.name)) {
       originals.get(el)?.()
       continue
@@ -1198,7 +1223,7 @@ function Dilekce<S extends StandardSchemaV1 | undefined = undefined>({
         data-checking={checking || undefined}
         aria-busy={checking || undefined}
         className={cn(
-          "group/dilekce @container/dilekce flex flex-col gap-px overflow-clip rounded-lg border bg-border text-foreground [--dk-ink:var(--primary)] forced-colors:gap-0",
+          "group/dilekce @container/dilekce flex flex-col gap-px overflow-clip rounded-lg border bg-border text-foreground [--dk-ink:var(--primary)] forced-colors:gap-0 dark:[color-scheme:dark]",
           "print:rounded-none print:[print-color-adjust:exact]",
           DENSITY,
           className,
@@ -1990,7 +2015,7 @@ function DilekceField({
               "-mt-1 inline-flex min-h-6 min-w-6 cursor-pointer items-center justify-center gap-1 self-start justify-self-end rounded-sm px-1 font-mono text-(length:--dk-label) leading-[1.3] tracking-[0.02em] text-muted-foreground opacity-0 transition-opacity duration-150 motion-reduce:transition-none [grid-area:error]",
               "group-hover/field:opacity-100 hover:bg-foreground/8 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-(--dk-focus) pointer-coarse:opacity-100 data-copied:opacity-100",
               // Nothing to copy: an empty field, or a group with nothing chosen.
-              "group-has-[:placeholder-shown]/field:hidden group-has-data-empty/field:hidden group-has-[[data-slot=dilekce-choices]]/field:group-not-has-checked/field:hidden",
+              "group-has-[:placeholder-shown]/field:hidden group-has-data-empty/field:hidden group-has-[[data-slot=dilekce-choices]]/field:group-not-has-checked/field:hidden group-has-[[data-slot=dilekce-toggle]]/field:group-not-has-checked/field:hidden",
               "print:hidden",
             )}
             data-copied={copied || undefined}
@@ -2109,7 +2134,7 @@ export interface DilekceAffixProps {
 const AFFIX = cn(
   "shrink-0 text-(length:--dk-text) leading-[1.4] whitespace-nowrap text-muted-foreground select-none",
   // A completed form shows a dash for an empty value, without a lone unit.
-  "group-data-[mode=filled]/dilekce:group-has-[:placeholder-shown]/field:invisible",
+  "group-data-[mode=filled]/dilekce:group-has-[:placeholder-shown]/field:invisible group-data-[mode=filled]/dilekce:group-has-data-empty/field:invisible",
 )
 
 /** Ids for the affixes, so the control can be described by "kg" or "$". */
@@ -2143,11 +2168,81 @@ const describedWith = (...ids: Array<string | undefined>) =>
 
 export interface DilekceInputProps extends React.ComponentProps<"input">, DilekceAffixProps {}
 
+/** Types the browser draws its own editor and picker for. */
+const PICKER_TYPES = new Set(["date", "time", "datetime-local", "month", "week"])
+
+const pickerIcon = (paths: string) =>
+  `url("data:image/svg+xml,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none" stroke="#000" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`,
+  )}")`
+const CALENDAR_ICON = pickerIcon(
+  '<rect x="2" y="3" width="12" height="11" rx="2"/><path d="M2 6.5h12M5.5 1.75v2.5M10.5 1.75v2.5"/>',
+)
+const CLOCK_ICON = pickerIcon('<circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/>')
+
+const PICKER = cn(
+  // The browser's picker button is a bitmap that takes no color. Used as a mask it
+  // takes the token's, in light and dark; forced colors get CanvasText.
+  "[&::-webkit-calendar-picker-indicator]:size-4 [&::-webkit-calendar-picker-indicator]:cursor-pointer [&::-webkit-calendar-picker-indicator]:rounded-sm [&::-webkit-calendar-picker-indicator]:bg-muted-foreground [&::-webkit-calendar-picker-indicator]:bg-none [&::-webkit-calendar-picker-indicator]:[mask:var(--dk-picker)_center/contain_no-repeat] [&::-webkit-calendar-picker-indicator:hover]:bg-foreground forced-colors:[&::-webkit-calendar-picker-indicator]:bg-[CanvasText]",
+  // The editor has no placeholder: an empty one shows the format, muted until it's used.
+  "data-empty:text-muted-foreground data-empty:focus:text-foreground",
+  // Filled: a read-only value, or nothing (the cell shows the dash).
+  "group-data-[mode=filled]/dilekce:[&::-webkit-calendar-picker-indicator]:hidden group-data-[mode=filled]/dilekce:data-empty:text-transparent",
+)
+
+/**
+ * What an input holds, as a string, for the types `:placeholder-shown` can't
+ * tell empty from full (date, time, file: there is no placeholder to show).
+ * Read after every render, when the user changes it, when focus moves and after
+ * a form reset. Code assigning `value` is picked up at the next of those, like
+ * any uncontrolled input. For a file input: the chosen names, joined by NUL.
+ */
+function useTrackedValue(
+  ref: React.RefObject<HTMLInputElement | null>,
+  enabled: boolean,
+  initial: string,
+) {
+  const [text, setText] = React.useState(initial)
+  const read = React.useCallback(() => {
+    const input = ref.current
+    if (!input) return
+    setText(input.type === "file" ? fileNames(input).join("\u0000") : input.value)
+  }, [ref])
+  // Controlled values change on a render.
+  React.useLayoutEffect(() => {
+    if (enabled) read()
+  })
+  // After the form applied `defaultValues` (a layout effect of its own), and then on events.
+  React.useEffect(() => {
+    const input = ref.current
+    if (!enabled || !input) return
+    read()
+    const onReset = () => setTimeout(read)
+    const form = input.form
+    form?.addEventListener("reset", onReset)
+    const events = ["input", "change", "focus", "blur"]
+    for (const event of events) input.addEventListener(event, read)
+    return () => {
+      form?.removeEventListener("reset", onReset)
+      for (const event of events) input.removeEventListener(event, read)
+    }
+  }, [enabled, read, ref])
+  return text
+}
+
+/**
+ * A text input of any `type`. `date`, `time`, `datetime-local`, `month` and
+ * `week` are first-class: the native editor and picker, the picker button in
+ * the theme's colors, `min` and `max` through the usual messages, and a dash
+ * in filled mode when empty.
+ */
 function DilekceInput({
   className,
+  style,
   placeholder = " ",
   leading,
   trailing,
+  ref,
   ...props
 }: DilekceInputProps) {
   const affixes = useAffixIds(leading, trailing)
@@ -2155,14 +2250,34 @@ function DilekceInput({
     ...props,
     "aria-describedby": describedWith(props["aria-describedby"], affixes.leading, affixes.trailing),
   })
+  const picker = PICKER_TYPES.has(props.type ?? "")
+  const inputRef = React.useRef<HTMLInputElement>(null)
+  const mergedRef = useMergedRef(inputRef, ref)
+  const text = useTrackedValue(inputRef, picker, String(props.value ?? props.defaultValue ?? ""))
   const input = (
     <input
       data-slot="dilekce-input"
       // A blank placeholder lets :placeholder-shown mean "empty".
       placeholder={placeholder}
-      className={cn(CONTROL_CLASS, (leading != null || trailing != null) && "flex-1", className)}
+      className={cn(
+        CONTROL_CLASS,
+        picker && PICKER,
+        (leading != null || trailing != null) && "flex-1",
+        className,
+      )}
+      style={
+        picker
+          ? ({
+              "--dk-picker": props.type === "time" ? CLOCK_ICON : CALENDAR_ICON,
+              ...style,
+            } as React.CSSProperties)
+          : style
+      }
       {...props}
       {...control}
+      ref={mergedRef}
+      // Date inputs can't show a placeholder, so emptiness is read from the value.
+      data-empty={picker && text === "" ? "" : undefined}
     />
   )
   if (leading == null && trailing == null) return input
@@ -2763,6 +2878,209 @@ function DilekceCheckboxGroup({
 }
 
 /* -------------------------------------------------------------------------- */
+/*                         Checkbox, switch and file input                    */
+/* -------------------------------------------------------------------------- */
+
+const TOGGLE = cn(
+  "inline-flex w-fit max-w-full cursor-default items-start gap-2 text-(length:--dk-text) leading-[1.4]",
+  "group-data-[mode=filled]/dilekce:text-(--dk-ink) group-data-[mode=filled]/dilekce:not-has-checked:text-muted-foreground",
+)
+
+// The box (or track) is centered on the text's first line, however long the text runs.
+const TOGGLE_MARK = "relative mt-[calc((1lh-var(--box))/2)] shrink-0"
+
+interface ToggleProps extends Omit<React.ComponentProps<"input">, "type" | "children"> {
+  /** The control's own text, beside it: what names it. */
+  children?: React.ReactNode | undefined
+}
+
+function Toggle({
+  kind,
+  children,
+  className,
+  onClick,
+  onKeyDown,
+  ...props
+}: ToggleProps & { kind: "checkbox" | "switch" }) {
+  const field = useField()
+  const text = hasContent(children)
+  // With text beside it, the control is named by that text and the field's label
+  // names the group around it; without, the field's label names the control.
+  useGroupLabel(text)
+  // A checkbox's `value` is what it submits, not a controlled value: `checked` is.
+  const control = useControl({ ...props, value: props.checked })
+  const guard = useReadOnlyGuard(Boolean(control.readOnly))
+  const named = text && field != null
+
+  const input = (
+    <input
+      data-slot={`dilekce-${kind}`}
+      {...props}
+      type="checkbox"
+      role={kind === "switch" ? "switch" : undefined}
+      id={control.id}
+      name={control.name}
+      data-controlled={control["data-controlled"]}
+      aria-describedby={control["aria-describedby"]}
+      aria-invalid={control["aria-invalid"]}
+      // Valid on a checkbox and a switch; read-only choices keep focus but ignore changes.
+      aria-readonly={control.readOnly}
+      className={cn(
+        MARK,
+        kind === "switch" ? "absolute inset-0 size-full rounded-full" : "rounded-[3px]",
+        "disabled:cursor-not-allowed",
+        className,
+      )}
+      onClick={(event) => {
+        guard.onClick(event)
+        onClick?.(event)
+      }}
+      onKeyDown={(event) => {
+        guard.onKeyDown(event)
+        onKeyDown?.(event)
+      }}
+    />
+  )
+
+  return (
+    <div
+      data-slot="dilekce-toggle"
+      role={named ? "group" : undefined}
+      aria-labelledby={named ? field.labelId : undefined}
+      className="min-w-0 [grid-area:control]"
+    >
+      <label className={TOGGLE}>
+        {kind === "switch" ? (
+          // Sized to the cell's text. The thumb is placed with logical offsets, so it
+          // runs the right way round in right-to-left.
+          <span
+            className={cn(
+              TOGGLE_MARK,
+              "[--box:var(--sw)] [--sw:calc(var(--dk-text)*1.2)] inline-grid h-(--sw) w-[calc(var(--sw)*1.85)]",
+            )}
+          >
+            {input}
+            <span
+              aria-hidden="true"
+              data-slot="dilekce-switch-thumb"
+              className="pointer-events-none absolute start-[3.5px] top-1/2 size-[calc(var(--sw)-7px)] -translate-y-1/2 rounded-full bg-muted-foreground transition-[inset-inline-start,background-color] duration-150 ease-out peer-checked:start-[calc(100%-var(--sw)+3.5px)] peer-checked:bg-background motion-reduce:transition-none forced-colors:bg-[CanvasText] forced-colors:peer-checked:bg-[HighlightText]"
+            />
+          </span>
+        ) : (
+          <span className={cn(TOGGLE_MARK, "[--box:0.9375rem] grid place-items-center")}>
+            {input}
+            <svg
+              viewBox="0 0 10 10"
+              aria-hidden="true"
+              className="pointer-events-none absolute hidden size-2.5 text-primary-foreground peer-checked:block forced-colors:text-[HighlightText]"
+            >
+              <path
+                d="M2 5.5 4.2 7.5 8 3"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
+        )}
+        {text && <span className="min-w-0">{children}</span>}
+      </label>
+    </div>
+  )
+}
+
+export interface DilekceCheckboxProps extends ToggleProps {}
+
+/**
+ * One checkbox: a consent, "same as billing". Its `children` are its text, which
+ * names it; the field's label names the group around it. In the form's values
+ * it is its `value` ("on" unless set) when ticked, and absent when not: read it
+ * with `z.literal("on")` (`.optional()` when it may stay off) or, for a plain
+ * boolean, `z.coerce.boolean().default(false)`.
+ */
+function DilekceCheckbox(props: DilekceCheckboxProps) {
+  return <Toggle kind="checkbox" {...props} />
+}
+
+export interface DilekceSwitchProps extends ToggleProps {}
+
+/**
+ * A native checkbox with `role="switch"`, drawn as a track and a thumb. Same
+ * text, value and validation as `DilekceCheckbox`.
+ */
+function DilekceSwitch(props: DilekceSwitchProps) {
+  return <Toggle kind="switch" {...props} />
+}
+
+export interface DilekceFileProps extends Omit<
+  React.ComponentProps<"input">,
+  "type" | "value" | "defaultValue" | "children"
+> {}
+
+/**
+ * A native file input with the theme's small outline button. Pass `accept` and
+ * `multiple` like on any input; `accept` only filters the picker, so check type
+ * and size in `validate` or the schema. `required` works through constraint
+ * validation. The schema gets a `File` (`File[]` with `multiple`); `defaultValues`
+ * don't apply, because a page can't choose a file for the user. In filled mode
+ * the control gives way to the file names, or a dash.
+ */
+function DilekceFile({ className, ref, ...props }: DilekceFileProps) {
+  const inputRef = React.useRef<HTMLInputElement>(null)
+  const mergedRef = useMergedRef(inputRef, ref)
+  const text = useTrackedValue(inputRef, true, "")
+  const names = text === "" ? [] : text.split("\u0000")
+  const namesId = React.useId()
+  // The browser says "3 files" for several: the names are the description.
+  const control = useControl({
+    ...props,
+    "aria-describedby": describedWith(
+      props["aria-describedby"],
+      props.multiple && names.length > 1 ? namesId : undefined,
+    ),
+  })
+  const guard = useReadOnlyGuard(Boolean(control.readOnly))
+  return (
+    <div data-slot="dilekce-file-field" className="min-w-0 [grid-area:control]">
+      <input
+        data-slot="dilekce-file"
+        {...props}
+        {...control}
+        ref={mergedRef}
+        type="file"
+        data-empty={names.length === 0 ? "" : undefined}
+        className={cn(
+          CONTROL_CLASS,
+          "cursor-[inherit] data-empty:text-muted-foreground",
+          // The browser's button, as a small outline button.
+          "file:me-3 file:h-6 file:cursor-pointer file:rounded-md file:border file:border-input file:bg-background file:px-2.5 file:[font-family:inherit] file:text-[calc(var(--dk-text)*0.875)] file:font-medium file:text-foreground file:transition-colors motion-reduce:file:transition-none [&::file-selector-button:hover]:bg-accent",
+          "forced-colors:file:border-[ButtonText]",
+          // Filled: the names below stand in for the control.
+          "group-data-[mode=filled]/dilekce:hidden",
+          className,
+        )}
+        onClick={(event) => {
+          // A read-only file field must not open the picker, not even from its label.
+          guard.onClick(event)
+          props.onClick?.(event)
+        }}
+      />
+      {names.length > 0 && (
+        <span
+          id={namesId}
+          data-slot="dilekce-file-names"
+          className="sr-only text-(length:--dk-text) leading-[1.4] text-(--dk-ink) [overflow-wrap:anywhere] group-data-[mode=filled]/dilekce:not-sr-only"
+        >
+          {names.join(", ")}
+        </span>
+      )}
+    </div>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
 /*                                   Actions                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -2786,8 +3104,10 @@ function DilekceActions({ className, ...props }: React.ComponentProps<"div">) {
 export {
   Dilekce,
   DilekceActions,
+  DilekceCheckbox,
   DilekceCheckboxGroup,
   DilekceField,
+  DilekceFile,
   DilekceInput,
   DilekceNumber,
   DilekceRadioGroup,
@@ -2795,5 +3115,6 @@ export {
   DilekceSection,
   DilekceSelect,
   DilekceSummary,
+  DilekceSwitch,
   DilekceTextarea,
 }

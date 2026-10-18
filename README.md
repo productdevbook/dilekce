@@ -115,6 +115,9 @@ its own short message and focus goes to the first one that needs attention.
 | `DilekceNumber`        | `<input type="number">`   | −/+ steppers that repeat while held; drag across the label to scrub; `leading`, `trailing`                        |
 | `DilekceRadioGroup`    | Native radios             | `options`, `value`, `defaultValue`, `onValueChange`                                                               |
 | `DilekceCheckboxGroup` | Native checkboxes         | Same, with `string[]`; `required` means at least one; uncontrolled unless you pass `value`, so reset clears it    |
+| `DilekceCheckbox`      | One native checkbox       | A consent, "same as billing": `children` is its text, which names it; `required` works; see below                 |
+| `DilekceSwitch`        | `<input role="switch">`   | A checkbox drawn as a track and a thumb; same text, value and rules as `DilekceCheckbox`                          |
+| `DilekceFile`          | `<input type="file">`     | `accept`, `multiple`; the browser's button restyled; `required` works; see below                                  |
 | `DilekceActions`       | `<div>`                   | The form's last row. Put your shadcn `<Button>`s here, primary last                                               |
 
 ## Validation
@@ -336,6 +339,58 @@ Give the field its message with `error`. While it's set the field is invalid,
 and the empty state keep working. Values written from code, such as
 `setValue`, are picked up on the next focus change, reset or submit; a
 controlled `value` is followed at once.
+
+## Checkbox, switch, file and dates
+
+**`DilekceCheckbox` and `DilekceSwitch`** are one native checkbox (the switch
+has `role="switch"`). Their `children` are the text beside the control and
+name it; the field's `label` names the group around it, so a screen reader says
+"Consent, group; I agree to the terms, checkbox, required". Without children,
+the field's label names the control instead.
+
+```tsx
+<DilekceField name="consent" label="Consent">
+  <DilekceCheckbox required>I agree to the <a href="/terms">terms</a></DilekceCheckbox>
+</DilekceField>
+<DilekceField name="sms" label="Alerts">
+  <DilekceSwitch>SMS updates</DilekceSwitch>
+</DilekceField>
+```
+
+- **Value:** the checkbox's `value` (`"on"` unless you set one) when ticked,
+  and the name is absent when not. Read it with `z.literal("on")` (add
+  `.optional()` if it may stay off) or, for a boolean, with
+  `z.coerce.boolean().default(false)`. `defaultValues={{ consent: true }}`
+  ticks it. `required` says "Required" until it is ticked.
+- **Filled mode:** read-only; the text is muted when off; the copy button
+  copies the text, and is hidden when off.
+- The switch is sized to the cell's text, and in forced colors keeps a visible
+  track edge and a thumb on the side that says on or off.
+
+**`DilekceFile`** is a native `<input type="file">`; pass `accept` and
+`multiple` as usual. The browser's button is drawn as a small outline button
+in your tokens, with the chosen name (the browser's "3 files" for several; the
+names are the control's description). `required` uses constraint validation.
+
+- **Values:** the schema gets a `File` (absent when none was chosen), or a
+  `File[]` with `multiple` (empty when none). A field's own `validate` gets the
+  names, and the files are in its `data` (`data.get("invoice")`). `accept` only
+  filters the picker: check type and size in `validate` or the schema
+  (`z.instanceof(File).refine((f) => f.size < 5e6, "Too big")`).
+- **`defaultValues` don't apply**: a page can't choose a file for the user, so
+  a default would only pretend one was chosen. Show an existing upload next to
+  the field instead.
+- **Filled mode:** the control gives way to the file names, or a dash; the copy
+  button copies the names. A chosen file counts for `onDirtyChange`.
+
+**Date and time:** `DilekceInput type="date" | "time" | "datetime-local" |
+"month" | "week"` is first-class. The browser's own editor and picker are
+used; the picker button takes `--muted-foreground` (and follows your `.dark`
+class, which also sets `color-scheme: dark` on the form). `min` and `max` say
+"Too low" and "Too high" like numbers (override them with `messages`). In
+filled mode an empty value shows the dash, a value shows as the browser writes
+it for the user's locale. Values stay in the browser's ISO form (`2026-03-15`,
+`09:30`), so a schema can use `z.iso.date()`.
 
 ## Affixes and counter
 

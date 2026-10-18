@@ -6,8 +6,10 @@ import { Button } from "@/components/ui/button"
 import {
   Dilekce,
   DilekceActions,
+  DilekceCheckbox,
   DilekceCheckboxGroup,
   DilekceField,
+  DilekceFile,
   DilekceInput,
   DilekceNumber,
   DilekceRadioGroup,
@@ -15,6 +17,7 @@ import {
   DilekceSection,
   DilekceSelect,
   DilekceSummary,
+  DilekceSwitch,
   DilekceTextarea,
   dilekceMessages,
   type DilekceDensity,
@@ -54,6 +57,13 @@ const copy = {
     unsaved: "Unsaved changes",
     houseNumber: "Add a house number",
     noFood: "Same-day delivery doesn't take food",
+    invoice: "Customs invoice",
+    invoiceHint: "PDF or an image, for parcels that leave the country.",
+    pickupDate: "Pickup date",
+    alerts: "Alerts",
+    sms: "SMS updates",
+    consentLabel: "Consent",
+    consent: "I agree to the courier terms",
   },
   tr: {
     sender: "Gönderici",
@@ -83,10 +93,20 @@ const copy = {
     unsaved: "Kaydedilmemiş değişiklikler",
     houseNumber: "Bina numarasını ekleyin",
     noFood: "Aynı gün teslimat gıda taşımaz",
+    invoice: "Gümrük faturası",
+    invoiceHint: "PDF ya da görsel; yurt dışına giden paketler için.",
+    pickupDate: "Alım tarihi",
+    alerts: "Bildirimler",
+    sms: "SMS ile haber ver",
+    consentLabel: "Onay",
+    consent: "Kurye şartlarını kabul ediyorum",
   },
 }
 
 type Lang = keyof typeof copy
+
+/** Today as the date input writes it (local time, not UTC). */
+const today = () => new Date().toLocaleDateString("sv")
 
 export function App() {
   const [mode, setMode] = React.useState<DilekceMode>("edit")
@@ -113,6 +133,10 @@ export function App() {
           value: z.union([z.literal("").transform(() => undefined), z.coerce.number()]),
           service: z.string(),
           contents: z.string(),
+          // A single checkbox is "on" when ticked and absent when not.
+          consent: z.literal("on"),
+          // A file field gives a File (File[] with `multiple`), absent when none was chosen.
+          invoice: z.instanceof(File).optional(),
         })
         // No path: the issue belongs to the form, so only the summary shows it.
         .refine((v) => !(v.service === "same-day" && v.contents === "food"), {
@@ -126,6 +150,7 @@ export function App() {
       weight: 1.5,
       pieces: 1,
       service: "standard",
+      sms: true,
       ...(sample
         ? {
             name: "Ada Lovelace",
@@ -135,6 +160,7 @@ export function App() {
             value: 250,
             contents: "documents",
             extras: ["signature"],
+            pickup: today(),
           }
         : {}),
     }),
@@ -293,6 +319,11 @@ export function App() {
                   />
                 </DilekceField>
               </DilekceRow>
+              <DilekceRow>
+                <DilekceField name="invoice" label={t.invoice} span={4} description={t.invoiceHint}>
+                  <DilekceFile accept="application/pdf,image/*" />
+                </DilekceField>
+              </DilekceRow>
             </DilekceSection>
 
             <DilekceSection legend={t.delivery}>
@@ -315,6 +346,17 @@ export function App() {
                       { value: "fragile", label: "Fragile" },
                     ]}
                   />
+                </DilekceField>
+              </DilekceRow>
+              <DilekceRow>
+                <DilekceField name="pickup" label={t.pickupDate}>
+                  <DilekceInput type="date" min={today()} required />
+                </DilekceField>
+                <DilekceField name="sms" label={t.alerts}>
+                  <DilekceSwitch>{t.sms}</DilekceSwitch>
+                </DilekceField>
+                <DilekceField name="consent" label={t.consentLabel} span={2}>
+                  <DilekceCheckbox required>{t.consent}</DilekceCheckbox>
                 </DilekceField>
               </DilekceRow>
               <DilekceRow>
@@ -343,7 +385,11 @@ export function App() {
 
         {submitted && (
           <pre className="overflow-x-auto rounded-lg border bg-muted p-4 font-mono text-xs">
-            {JSON.stringify(submitted, null, 2)}
+            {JSON.stringify(
+              submitted,
+              (_key, value) => (value instanceof File ? `${value.name} (${value.size} B)` : value),
+              2,
+            )}
           </pre>
         )}
       </section>

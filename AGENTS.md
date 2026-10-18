@@ -30,7 +30,7 @@ components.json             # shadcn config for the demo project
 One file, copied into the user's project by `npx shadcn add`. Exports:
 `Dilekce`, `DilekceSection`, `DilekceRow`, `DilekceField`, `DilekceInput`,
 `DilekceTextarea`, `DilekceSelect`, `DilekceNumber`, `DilekceRadioGroup`,
-`DilekceCheckboxGroup`, `DilekceActions`, `DilekceSummary`, `dilekceMessages`
+`DilekceCheckboxGroup`, `DilekceCheckbox`, `DilekceSwitch`, `DilekceFile`, `DilekceActions`, `DilekceSummary`, `dilekceMessages`
 (`en`, `tr`), and the types `DilekceMode`, `DilekceDensity`, `DilekceMessages`,
 `DilekceErrors`, `DilekceOption`, `DilekceValidityKey`, `DilekceMessageKey`,
 `DilekceValidator`, `DilekceInvalidField`, `DilekceValues`, `DilekceOutput`,
@@ -72,6 +72,26 @@ the spec, no dependency).
   `data-checking`, newest run wins, a throwing rule doesn't block). Shows a
   `n/max` counter for `maxLength`.
 - `DilekceInput`, `DilekceNumber`: `leading`, `trailing` affixes.
+- `DilekceCheckbox` / `DilekceSwitch` (one `Toggle`): a native checkbox in
+  `div[data-slot=dilekce-toggle]` (`role=group` named by the field label when
+  `children` text exists; then `useGroupLabel(true)` makes the label a `<div>`).
+  Not `dilekce-choices`, so `valueOf`/`readValues` treat it as a single
+  checkbox: its `value` ("on") or absent. Its `value` prop is the submitted
+  string, not a controlled value (`useControl` gets `checked` as `value`).
+  Switch: track = `MARK` input at `size-full`, thumb a sibling placed with
+  `inset-inline-start` (RTL-safe), sized by `--sw` from `--dk-text`.
+- `DilekceFile`: native input, `::file-selector-button` as outline button,
+  `data-empty` from `useTrackedValue`; in filled mode the input is
+  `display:none` and the names span (sr-only in edit, a description for
+  `multiple`) shows. Click is prevented read-only (also from the label).
+  `readValues`: `File`, or `File[]` for `multiple`, absent when single and
+  empty; `valueOf` gives names; `defaultValues` skip files; dirty snapshot
+  uses name+size+date.
+- Date types (`PICKER_TYPES`) get `data-empty` from the value (no
+  `:placeholder-shown` on them), the picker indicator as a token-coloured
+  mask (`--dk-picker` icon; CanvasText in forced colors), and the form sets
+  `dark:[color-scheme:dark]`. `getComputedStyle` can't see that UA pseudo:
+  tests scan the stylesheet (`rulesMentioning`).
 - `DilekceCheckboxGroup` is uncontrolled unless `value` is passed.
 - Behaviour worth knowing (each has a test):
   - A newer submit supersedes an async check still running (the older result
@@ -153,6 +173,9 @@ bun run build            # registry + static demo
   next focus change, reset, submit or page leave, not at once (the counter
   shows only while focused or near the limit, so that is invisible, but
   `data-dirty` can lag until then).
+  The same limit holds for `data-empty` on date/time and file inputs
+  (`useTrackedValue`: read after each render, on input/change/focus/blur and
+  after a reset; no setter wrap, it would clobber React's value tracker).
 
 - **Number inputs and React.** Setting `input.value` from code goes through
   React's value tracker and the following `input` event is swallowed.
@@ -166,7 +189,7 @@ bun run build            # registry + static demo
 
 ## Project Status
 
-v0.1. The full gate (`bun run test`) is green: 130 tests, zero lint warnings,
+v0.1. The full gate (`bun run test`) is green: 202 tests, zero lint warnings,
 zero typecheck errors (default and strict). Correctness audit items fixed:
 double submit, action errors surviving reset, ref merging, value from
 controls, disabled, programmatic writes, `step="any"`, strict TS. Review round 1
@@ -182,7 +205,7 @@ tests in the "accessibility" blocks at the end of `test/dilekce.test.tsx`
 (forced colors and reduced motion are emulated through `cdp()`). Left open:
 `errors` still block a resubmit until the field is edited (a product decision,
 covered by a test); ROADMAP #16 (error summary), #17 (Standard Schema) and #18
-(`defaultValues`) are built; P1 #19 to #22 (features) are open, the a11y P3 items F4, F10, F12
+(`defaultValues`) and #21 (checkbox, switch, file, date types) are built; P1 #19, #20, #22 (features) are open, the a11y P3 items F4, F10, F12
 (`lang` is the app's job) and F13 (demo). Not yet published: the install URL
 points at `public/r/dilekce.json` on the `main` branch of
 `github.com/productdevbook/dilekce`, which doesn't exist yet.

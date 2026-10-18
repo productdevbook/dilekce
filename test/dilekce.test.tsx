@@ -9,8 +9,10 @@ import "../src/index.css"
 import {
   Dilekce,
   DilekceActions,
+  DilekceCheckbox,
   DilekceCheckboxGroup,
   DilekceField,
+  DilekceFile,
   DilekceInput,
   DilekceNumber,
   DilekceRadioGroup,
@@ -18,6 +20,7 @@ import {
   DilekceSection,
   DilekceSelect,
   DilekceSummary,
+  DilekceSwitch,
   DilekceTextarea,
   dilekceMessages,
   type DilekceErrors,
@@ -3022,5 +3025,919 @@ describe("defaultValues", () => {
     expect($<HTMLInputElement>("[name=name]").value).toBe("set")
     await screen.rerender(<Markup defaults={{}} />)
     expect($<HTMLInputElement>("[name=name]").value).toBe("markup")
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/*                      Checkbox, switch, file and date types                 */
+/* -------------------------------------------------------------------------- */
+
+describe("checkbox and switch", () => {
+  const prevent = (event: React.FormEvent) => event.preventDefault()
+
+  for (const [kind, Toggle, role] of [
+    ["checkbox", DilekceCheckbox, "checkbox"],
+    ["switch", DilekceSwitch, "switch"],
+  ] as const) {
+    describe(kind, () => {
+      function Consent({
+        onValidSubmit,
+        mode,
+        schema,
+        value,
+        required = true,
+        defaults,
+      }: {
+        onValidSubmit?: (value: unknown) => void
+        mode?: DilekceMode
+        schema?: StandardSchemaV1
+        value?: string
+        required?: boolean
+        defaults?: React.ComponentProps<typeof Dilekce>["defaultValues"]
+      }) {
+        return (
+          <Dilekce
+            mode={mode}
+            schema={schema}
+            defaultValues={defaults}
+            onSubmit={prevent}
+            onValidSubmit={onValidSubmit}
+          >
+            <DilekceField name="consent" label="Consent" description="You can withdraw it later">
+              <Toggle required={required} value={value}>
+                I agree to the <a href="#terms">terms</a>
+              </Toggle>
+            </DilekceField>
+            <button type="submit">Go</button>
+            <button type="reset">Reset</button>
+          </Dilekce>
+        )
+      }
+
+      test("the control is named by its own text; the field's label names the group", async () => {
+        const screen = await render(<Consent />)
+        const group = screen.getByRole("group", { name: /^Consent/ })
+        await expect.element(group).toBeVisible()
+        const control = screen.getByRole(role, { name: "I agree to the terms" })
+        await expect.element(control).toBeVisible()
+        expect(group.element().contains(control.element())).toBe(true)
+        // The label is a <div>, not a <label> pointing at a control it doesn't name.
+        expect($("[data-slot=dilekce-label]").tagName).toBe("DIV")
+        expect(describedText(control.element())).toBe("You can withdraw it later")
+        expect($<HTMLInputElement>("[name=consent]").required).toBe(true)
+      })
+
+      test("without text the field's label names the control", async () => {
+        const screen = await render(
+          <Dilekce>
+            <DilekceField name="on" label="Notifications">
+              <Toggle />
+            </DilekceField>
+          </Dilekce>,
+        )
+        await expect.element(screen.getByRole(role, { name: "Notifications" })).toBeVisible()
+        expect(document.querySelector("[role=group]")).toBeNull()
+        expect($("[data-slot=dilekce-label]").tagName).toBe("LABEL")
+      })
+
+      test("required says Required when unticked, with the message in its description", async () => {
+        const onValidSubmit = vi.fn()
+        const screen = await render(<Consent onValidSubmit={onValidSubmit} />)
+        await screen.getByRole("button", { name: "Go" }).click()
+        expect(errorOf("consent")).toBe("Required")
+        const control = $<HTMLInputElement>("[name=consent]")
+        expect(control.getAttribute("aria-invalid")).toBe("true")
+        expect(describedText(control)).toBe("You can withdraw it later Required")
+        expect(document.activeElement).toBe(control)
+        expect(onValidSubmit).not.toHaveBeenCalled()
+
+        await screen.getByRole(role).click()
+        expect(errorOf("consent")).toBeNull()
+        await screen.getByRole("button", { name: "Go" }).click()
+        expect(onValidSubmit).toHaveBeenCalledTimes(1)
+      })
+
+      test("the value is the checkbox's value when ticked, and absent when not", async () => {
+        const onValidSubmit = vi.fn()
+        const screen = await render(<Consent required={false} onValidSubmit={onValidSubmit} />)
+        await screen.getByRole("button", { name: "Go" }).click()
+        expect(onValidSubmit.mock.calls[0]![0]).toEqual({})
+        await screen.getByRole(role).click()
+        await screen.getByRole("button", { name: "Go" }).click()
+        expect(onValidSubmit.mock.calls[1]![0]).toEqual({ consent: "on" })
+        await screen.rerender(
+          <Consent required={false} value="yes" onValidSubmit={onValidSubmit} />,
+        )
+        await screen.getByRole("button", { name: "Go" }).click()
+        expect(onValidSubmit.mock.calls[2]![0]).toEqual({ consent: "yes" })
+      })
+
+      test("a schema reads it as z.literal('on') or z.coerce.boolean().default(false)", async () => {
+        const onValidSubmit = vi.fn()
+        const screen = await render(
+          <Consent
+            required={false}
+            schema={z.object({ consent: z.literal("on", "You must agree") })}
+            onValidSubmit={onValidSubmit}
+          />,
+        )
+        await screen.getByRole("button", { name: "Go" }).click()
+        expect(errorOf("consent")).toBe("You must agree")
+        await screen.getByRole(role).click()
+        await screen.getByRole("button", { name: "Go" }).click()
+        expect(onValidSubmit.mock.lastCall![0]).toEqual({ consent: "on" })
+
+        const coerced = vi.fn()
+        await screen.rerender(
+          <Consent
+            required={false}
+            schema={z.object({ consent: z.coerce.boolean().default(false) })}
+            onValidSubmit={coerced}
+          />,
+        )
+        await screen.getByRole("button", { name: "Go" }).click()
+        expect(coerced.mock.lastCall![0]).toEqual({ consent: true })
+        await screen.getByRole(role).click()
+        await screen.getByRole("button", { name: "Go" }).click()
+        expect(coerced.mock.lastCall![0]).toEqual({ consent: false })
+      })
+
+      test("defaultValues tick it, a reset goes back, and ticking is a change", async () => {
+        const onDirtyChange = vi.fn()
+        const screen = await render(
+          <Dilekce onDirtyChange={onDirtyChange} defaultValues={{ consent: true }}>
+            <DilekceField name="consent" label="Consent">
+              <Toggle>Yes</Toggle>
+            </DilekceField>
+            <button type="reset">Reset</button>
+          </Dilekce>,
+        )
+        await expect.element(screen.getByRole(role, { name: "Yes" })).toBeChecked()
+        await screen.getByRole(role).click()
+        await expect.element(screen.getByRole(role)).not.toBeChecked()
+        expect($("[data-slot=dilekce]").hasAttribute("data-dirty")).toBe(true)
+        expect(onDirtyChange).toHaveBeenLastCalledWith(true)
+        await screen.getByRole("button", { name: "Reset" }).click()
+        await expect.element(screen.getByRole(role)).toBeChecked()
+        await expect.poll(() => $("[data-slot=dilekce]").hasAttribute("data-dirty")).toBe(false)
+      })
+
+      test("a controlled one follows checked, and defaultValues leave it alone", async () => {
+        function Held({ on }: { on: boolean }) {
+          return (
+            <Dilekce defaultValues={{ consent: false }}>
+              <DilekceField name="consent" label="Consent">
+                <Toggle checked={on} onChange={() => {}}>
+                  Yes
+                </Toggle>
+              </DilekceField>
+            </Dilekce>
+          )
+        }
+        const screen = await render(<Held on={true} />)
+        await expect.element(screen.getByRole(role)).toBeChecked()
+        await screen.rerender(<Held on={false} />)
+        await expect.element(screen.getByRole(role)).not.toBeChecked()
+        expect($("[name=consent]").hasAttribute("data-controlled")).toBe(true)
+      })
+
+      test("filled: read-only, muted when off, copied as its text, no dash", async () => {
+        const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue()
+        const screen = await render(
+          <Dilekce mode="filled">
+            <DilekceField name="yes" label="Accepted">
+              <Toggle defaultChecked>Terms</Toggle>
+            </DilekceField>
+            <DilekceField name="no" label="Declined">
+              <Toggle>Newsletter</Toggle>
+            </DilekceField>
+          </Dilekce>,
+        )
+        const yes = $<HTMLInputElement>("[name=yes]")
+        const no = $<HTMLInputElement>("[name=no]")
+        expect(yes.getAttribute("aria-readonly")).toBe("true")
+        no.click()
+        expect(no.checked).toBe(false)
+        await yes.click()
+        expect(yes.checked).toBe(true)
+
+        const text = (input: Element) => style(input.closest("label")!).color
+        expect(text(no)).toBe(
+          style(fieldOf("no").querySelector("[data-slot=dilekce-label]")!).color,
+        )
+        expect(text(yes)).not.toBe(text(no))
+        expect(style(fieldOf("no"), "::after").content).not.toContain("—")
+        expect(style(fieldOf("yes"), "::after").content).not.toContain("—")
+
+        await screen.getByRole("button", { name: "Copy Accepted" }).click()
+        expect(writeText).toHaveBeenLastCalledWith("Terms")
+        // Nothing to copy when it's off.
+        expect(style(fieldOf("no").querySelector("[data-slot=dilekce-copy]")!).display).toBe("none")
+      })
+
+      test("announces the label and the message, like any field", async () => {
+        const screen = await render(<Consent />)
+        await screen.getByRole("button", { name: "Go" }).click()
+        await screen.getByRole(role).click()
+        await screen.getByRole(role).click()
+        await userEvent.tab()
+        await expect
+          .poll(() => $("[role=status]").textContent)
+          .toMatch(/Consent: Required|1 field needs attention/)
+      })
+    })
+  }
+
+  test("the checkbox keeps the group's marks: border, tick, 24px target, focus outline", async () => {
+    const screen = await render(
+      <Dilekce>
+        <DilekceField name="c" label="C">
+          <DilekceCheckbox defaultChecked>Yes</DilekceCheckbox>
+        </DilekceField>
+      </Dilekce>,
+    )
+    const box = $<HTMLInputElement>("[name=c]")
+    expect(style(box).appearance).toBe("none")
+    expect(Number.parseFloat(style(box).width)).toBeGreaterThanOrEqual(15)
+    expect(style(box.nextElementSibling!).display).not.toBe("none")
+    expect(box.closest("label")!.getBoundingClientRect().height).toBeGreaterThanOrEqual(22)
+    await userEvent.keyboard("{Tab}")
+    expect(document.activeElement).toBe(box)
+    expect(style(box).outlineStyle).toBe("solid")
+    await screen.getByRole("checkbox").click()
+  })
+
+  test("advance: Enter on a checkbox moves on, and submits from the last", async () => {
+    const onSubmit = vi.fn((event: React.FormEvent) => event.preventDefault())
+    await render(
+      <Dilekce advance onSubmit={onSubmit}>
+        <DilekceField name="a" label="A">
+          <DilekceCheckbox>One</DilekceCheckbox>
+        </DilekceField>
+        <DilekceField name="b" label="B">
+          <DilekceSwitch>Two</DilekceSwitch>
+        </DilekceField>
+      </Dilekce>,
+    )
+    $("[name=a]").focus()
+    await userEvent.keyboard("{Enter}")
+    expect(document.activeElement).toBe($("[name=b]"))
+    await userEvent.keyboard("{Enter}")
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("switch", () => {
+  function Sw({ mode, checked = false }: { mode?: DilekceMode; checked?: boolean }) {
+    return (
+      <Dilekce mode={mode}>
+        <DilekceField name="sms" label="Alerts">
+          <DilekceSwitch defaultChecked={checked}>SMS updates</DilekceSwitch>
+        </DilekceField>
+        <DilekceField name="other" label="Other">
+          <DilekceInput />
+        </DilekceField>
+      </Dilekce>
+    )
+  }
+  const track = () => $<HTMLInputElement>("[name=sms]")
+  const thumb = () => $("[data-slot=dilekce-switch-thumb]")
+
+  test("a track and a thumb, sized to the cell's text, the thumb inside the track", async () => {
+    const screen = await render(<Sw />)
+    const rect = track().getBoundingClientRect()
+    const text = Number.parseFloat(style($("[data-slot=dilekce]")).getPropertyValue("--dk-text"))
+    expect(text).toBeGreaterThan(0)
+    expect(rect.height).toBeCloseTo(1.2 * 16, 0)
+    expect(rect.width / rect.height).toBeCloseTo(1.85, 1)
+    const off = thumb().getBoundingClientRect()
+    expect(off.left).toBeGreaterThan(rect.left)
+    expect(off.right).toBeLessThan(rect.right)
+    expect(off.top).toBeGreaterThan(rect.top)
+    expect(off.bottom).toBeLessThan(rect.bottom)
+    // The track is centered on the text's first line.
+    const label = track().closest("label")!.getBoundingClientRect()
+    expect(rect.top + rect.height / 2).toBeCloseTo(label.top + 22.4 / 2, 0)
+    await screen.getByRole("switch").click()
+  })
+
+  test("on: the thumb moves to the end, the track takes primary and the thumb the background", async () => {
+    const screen = await render(<Sw />)
+    const before = thumb().getBoundingClientRect().left - track().getBoundingClientRect().left
+    expect(style(thumb()).backgroundColor).toBe(
+      style(fieldOf("other").querySelector("[data-slot=dilekce-label]")!).color,
+    )
+    await screen.getByRole("switch").click()
+    await sleep(300)
+    await expect.element(screen.getByRole("switch")).toBeChecked()
+    const after = thumb().getBoundingClientRect().left - track().getBoundingClientRect().left
+    expect(after).toBeGreaterThan(before + 10)
+    const probe = document.createElement("i")
+    probe.className = "bg-primary"
+    document.body.append(probe)
+    expect(style(track()).backgroundColor).toBe(style(probe).backgroundColor)
+    probe.className = "bg-background"
+    expect(style(thumb()).backgroundColor).toBe(style(probe).backgroundColor)
+    probe.remove()
+  })
+
+  for (const theme of ["light", "dark"] as const) {
+    test(`${theme}: the track's edge and the thumb stand out at 3:1 off and on`, async () => {
+      document.documentElement.classList.toggle("dark", theme === "dark")
+      const screen = await render(<Sw />)
+      const cell = style(fieldOf("sms")).backgroundColor
+      await userEvent.hover(document.body)
+      expect(ratio(style(track()).borderTopColor, cell), "off: edge").toBeGreaterThanOrEqual(3)
+      expect(
+        ratio(style(thumb()).backgroundColor, style(track()).backgroundColor),
+        "off: thumb",
+      ).toBeGreaterThanOrEqual(3)
+      await screen.getByRole("switch").click()
+      await userEvent.hover(document.body)
+      await sleep(300)
+      expect(ratio(style(track()).backgroundColor, cell), "on: track").toBeGreaterThanOrEqual(3)
+      expect(
+        ratio(style(thumb()).backgroundColor, style(track()).backgroundColor),
+        "on: thumb",
+      ).toBeGreaterThanOrEqual(3)
+    })
+  }
+
+  test("forced colors: a visible track edge, and a thumb that shows which side it's on", async () => {
+    await emulate([{ name: "forced-colors", value: "active" }])
+    const screen = await render(<Sw />)
+    expect(Number.parseFloat(style(track()).borderTopWidth)).toBeGreaterThanOrEqual(1)
+    expect(style(track()).borderTopColor).not.toBe(style(fieldOf("sms")).backgroundColor)
+    const off = {
+      track: style(track()).backgroundColor,
+      thumb: style(thumb()).backgroundColor,
+      edge: style(track()).borderTopColor,
+      left: thumb().getBoundingClientRect().left - track().getBoundingClientRect().left,
+    }
+    expect(off.thumb).not.toBe(style(fieldOf("sms")).backgroundColor)
+    await screen.getByRole("switch").click()
+    await sleep(300)
+    const on = {
+      track: style(track()).backgroundColor,
+      thumb: style(thumb()).backgroundColor,
+      edge: style(track()).borderTopColor,
+      left: thumb().getBoundingClientRect().left - track().getBoundingClientRect().left,
+    }
+    // Position, and a fill that differs, so it isn't colour alone.
+    expect(on.left).toBeGreaterThan(off.left + 10)
+    expect(on.track).not.toBe(off.track)
+    expect(ratio(on.thumb, on.track)).toBeGreaterThanOrEqual(3)
+    expect(ratio(off.thumb, off.track)).toBeGreaterThanOrEqual(3)
+  })
+
+  test("reduced motion: the thumb jumps", async () => {
+    await emulate([{ name: "prefers-reduced-motion", value: "reduce" }])
+    await render(<Sw />)
+    expect(style(thumb()).transitionProperty).toBe("none")
+    expect(style(track()).transitionProperty).toBe("none")
+  })
+
+  test("it grows with the density's text", async () => {
+    const heights: Record<string, number> = {}
+    for (const density of ["compact", "roomy"] as const) {
+      const screen = await render(
+        <Dilekce density={density}>
+          <DilekceField name="sms" label="Alerts">
+            <DilekceSwitch>SMS</DilekceSwitch>
+          </DilekceField>
+        </Dilekce>,
+      )
+      heights[density] = track().getBoundingClientRect().height
+      await screen.unmount()
+    }
+    expect(heights.roomy!).toBeGreaterThan(heights.compact!)
+  })
+
+  test("filled: on keeps the track filled in ink, off stays an empty track; neither moves", async () => {
+    const screen = await render(<Sw mode="filled" checked />)
+    await expect.element(screen.getByRole("switch")).toBeChecked()
+    await track().click()
+    expect(track().checked).toBe(true)
+    expect(track().getAttribute("aria-readonly")).toBe("true")
+  })
+})
+
+describe("file input", () => {
+  const prevent = (event: React.FormEvent) => event.preventDefault()
+  const pdf = () => new File(["%PDF"], "invoice.pdf", { type: "application/pdf" })
+  const png = () => new File(["png"], "scan.png", { type: "image/png" })
+
+  /** Chooses files the way the picker does: set `files`, then fire input and change. */
+  const choose = (input: HTMLInputElement, ...files: File[]) => {
+    const transfer = new DataTransfer()
+    for (const file of files) transfer.items.add(file)
+    input.files = transfer.files
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+    input.dispatchEvent(new Event("change", { bubbles: true }))
+  }
+
+  function Upload({
+    mode,
+    multiple,
+    required,
+    onValidSubmit,
+    schema,
+    defaults,
+    validate,
+  }: {
+    mode?: DilekceMode
+    multiple?: boolean
+    required?: boolean
+    onValidSubmit?: (value: unknown) => void
+    schema?: StandardSchemaV1
+    defaults?: React.ComponentProps<typeof Dilekce>["defaultValues"]
+    validate?: React.ComponentProps<typeof DilekceField>["validate"]
+  }) {
+    return (
+      <Dilekce
+        mode={mode}
+        schema={schema}
+        defaultValues={defaults}
+        onSubmit={prevent}
+        onValidSubmit={onValidSubmit}
+      >
+        <DilekceField name="invoice" label="Customs invoice" validate={validate}>
+          <DilekceFile accept="application/pdf,image/*" multiple={multiple} required={required} />
+        </DilekceField>
+        <button type="submit">Go</button>
+        <button type="reset">Reset</button>
+      </Dilekce>
+    )
+  }
+  const input = () => $<HTMLInputElement>("[name=invoice]")
+
+  test("a native file input named by the field's label, with accept and multiple passed on", async () => {
+    const screen = await render(<Upload multiple />)
+    await expect.element(screen.getByLabelText("Customs invoice")).toBeVisible()
+    expect(input().type).toBe("file")
+    expect(input().accept).toBe("application/pdf,image/*")
+    expect(input().multiple).toBe(true)
+  })
+
+  test("the browser's button is a small outline button in the theme's tokens", async () => {
+    await render(<Upload />)
+    const button = style(input(), "::file-selector-button")
+    const probe = document.createElement("i")
+    probe.className = "border-input bg-background text-foreground"
+    document.body.append(probe)
+    const tokens = style(probe)
+    expect(button.borderTopWidth).toBe("1px")
+    expect(button.borderTopColor).toBe(tokens.borderTopColor)
+    expect(button.backgroundColor).toBe(tokens.backgroundColor)
+    expect(button.color).toBe(tokens.color)
+    expect(Number.parseFloat(button.borderTopLeftRadius)).toBeGreaterThan(4)
+    expect(Number.parseFloat(button.height)).toBeGreaterThanOrEqual(24)
+    probe.remove()
+    // The rest of the control is the cell's: no border of its own.
+    expect(style(input()).borderTopWidth).toBe("0px")
+  })
+
+  test("the chosen name follows the button, muted until there is one", async () => {
+    await render(<Upload />)
+    expect(input().hasAttribute("data-empty")).toBe(true)
+    const muted = style(input()).color
+    choose(input(), pdf())
+    await expect.poll(() => input().hasAttribute("data-empty")).toBe(false)
+    expect(style(input()).color).not.toBe(muted)
+    expect($("[data-slot=dilekce-file-names]").textContent).toBe("invoice.pdf")
+  })
+
+  test("required says Required until a file is chosen; the browser's message is the generic one", async () => {
+    const screen = await render(<Upload required />)
+    await screen.getByRole("button", { name: "Go" }).click()
+    expect(errorOf("invoice")).toBe("Required")
+    choose(input(), pdf())
+    await expect.poll(() => errorOf("invoice")).toBeNull()
+  })
+
+  test("a rule gets the names, and the files are in the form data", async () => {
+    const validate = vi.fn((value: string | string[], data: FormData) => {
+      const file = data.get("invoice") as File
+      return file.size > 0 && file.size < 2 ? "Too small" : null
+    })
+    const screen = await render(<Upload validate={validate} />)
+    choose(input(), new File(["x"], "tiny.pdf"))
+    await screen.getByRole("button", { name: "Go" }).click()
+    expect(validate.mock.lastCall![0]).toBe("tiny.pdf")
+    expect(errorOf("invoice")).toBe("Too small")
+  })
+
+  test("the schema gets a File, a File[] for multiple, and nothing for an empty single field", async () => {
+    const onValidSubmit = vi.fn()
+    const screen = await render(
+      <Upload
+        onValidSubmit={onValidSubmit}
+        schema={z.object({ invoice: z.instanceof(File, { error: "Attach the invoice" }) })}
+      />,
+    )
+    await screen.getByRole("button", { name: "Go" }).click()
+    expect(errorOf("invoice")).toBe("Attach the invoice")
+    choose(input(), pdf())
+    await screen.getByRole("button", { name: "Go" }).click()
+    const value = onValidSubmit.mock.lastCall![0] as { invoice: File }
+    expect(value.invoice).toBeInstanceOf(File)
+    expect(value.invoice.name).toBe("invoice.pdf")
+    await screen.unmount()
+
+    const many = vi.fn()
+    const multi = await render(<Upload multiple onValidSubmit={many} />)
+    await multi.getByRole("button", { name: "Go" }).click()
+    expect(many.mock.lastCall![0]).toEqual({ invoice: [] })
+    choose(input(), pdf(), png())
+    await multi.getByRole("button", { name: "Go" }).click()
+    const files = (many.mock.lastCall![0] as { invoice: File[] }).invoice
+    expect(files.map((f) => f.name)).toEqual(["invoice.pdf", "scan.png"])
+    expect(files[0]).toBeInstanceOf(File)
+
+    await multi.unmount()
+    const none = vi.fn()
+    const single = await render(<Upload onValidSubmit={none} />)
+    await single.getByRole("button", { name: "Go" }).click()
+    expect(none.mock.lastCall![0]).toEqual({})
+  })
+
+  test("a chosen file is a change, and a reset clears it", async () => {
+    const screen = await render(<Upload />)
+    expect($("[data-slot=dilekce]").hasAttribute("data-dirty")).toBe(false)
+    choose(input(), pdf())
+    await expect.poll(() => $("[data-slot=dilekce]").hasAttribute("data-dirty")).toBe(true)
+    await screen.getByRole("button", { name: "Reset" }).click()
+    expect(input().files!.length).toBe(0)
+    await expect.poll(() => $("[data-slot=dilekce]").hasAttribute("data-dirty")).toBe(false)
+    await expect.poll(() => input().hasAttribute("data-empty")).toBe(true)
+    expect(document.querySelector("[data-slot=dilekce-file-names]")).toBeNull()
+  })
+
+  test("defaultValues don't reach it, and don't break the form", async () => {
+    await render(<Upload defaults={{ invoice: "invoice.pdf" }} />)
+    expect(input().files!.length).toBe(0)
+    expect(input().hasAttribute("data-empty")).toBe(true)
+  })
+
+  test("several files: the names describe the control, the browser says how many", async () => {
+    await render(<Upload multiple />)
+    choose(input(), pdf(), png())
+    await expect.poll(() => describedText(input())).toBe("invoice.pdf, scan.png")
+  })
+
+  test("filled: the control gives way to the names, or a dash", async () => {
+    const screen = await render(<Upload mode="filled" multiple />)
+    expect(style(input()).display).toBe("none")
+    expect(style(fieldOf("invoice"), "::after").content).toContain("—")
+    expect(style(fieldOf("invoice").querySelector("[data-slot=dilekce-copy]")!).display).toBe(
+      "none",
+    )
+    choose(input(), pdf(), png())
+    const names = $("[data-slot=dilekce-file-names]")
+    await expect.poll(() => style(names).position).not.toBe("absolute")
+    expect(names.textContent).toBe("invoice.pdf, scan.png")
+    expect(names.getBoundingClientRect().width).toBeGreaterThan(40)
+    expect(style(fieldOf("invoice"), "::after").content).not.toContain("—")
+
+    const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue()
+    await screen.getByRole("button", { name: "Copy Customs invoice" }).click()
+    expect(writeText).toHaveBeenLastCalledWith("invoice.pdf, scan.png")
+  })
+
+  test("filled: nothing opens the picker, not even the label", async () => {
+    await render(<Upload mode="filled" />)
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true })
+    input().dispatchEvent(click)
+    expect(click.defaultPrevented).toBe(true)
+  })
+
+  test("a disabled file field is skipped by the schema and the submit", async () => {
+    const onValidSubmit = vi.fn()
+    const screen = await render(
+      <Dilekce onSubmit={prevent} onValidSubmit={onValidSubmit}>
+        <DilekceField name="invoice" label="Invoice">
+          <DilekceFile required disabled />
+        </DilekceField>
+        <button type="submit">Go</button>
+      </Dilekce>,
+    )
+    await screen.getByRole("button", { name: "Go" }).click()
+    expect(onValidSubmit.mock.lastCall![0]).toEqual({})
+  })
+})
+
+/**
+ * The style rules that mention `part` in a selector, with the media query they sit
+ * in. `getComputedStyle` can't resolve the date input's picker button (a UA
+ * pseudo-element), so what's checked is the stylesheet that styles it.
+ */
+function rulesMentioning(part: string) {
+  const found: Array<{ css: string; media: string }> = []
+  const walk = (rules: CSSRuleList, media: string) => {
+    for (const rule of rules) {
+      if (rule instanceof CSSStyleRule && rule.selectorText.includes(part)) {
+        found.push({ css: rule.style.cssText, media })
+      }
+      if ("cssRules" in rule) {
+        walk(
+          (rule as CSSGroupingRule).cssRules,
+          rule instanceof CSSMediaRule ? rule.conditionText : media,
+        )
+      }
+    }
+  }
+  for (const sheet of document.styleSheets) walk(sheet.cssRules, "")
+  return found
+}
+
+describe("date and time inputs", () => {
+  const prevent = (event: React.FormEvent) => event.preventDefault()
+  const types = [
+    {
+      type: "date",
+      value: "2026-03-15",
+      min: "2026-03-10",
+      max: "2026-03-20",
+      early: "2026-03-01",
+      late: "2026-04-01",
+    },
+    { type: "time", value: "09:30", min: "08:00", max: "17:00", early: "07:00", late: "18:00" },
+    {
+      type: "datetime-local",
+      value: "2026-03-15T09:30",
+      min: "2026-03-10T00:00",
+      max: "2026-03-20T00:00",
+      early: "2026-03-01T00:00",
+      late: "2026-04-01T00:00",
+    },
+    {
+      type: "month",
+      value: "2026-03",
+      min: "2026-02",
+      max: "2026-04",
+      early: "2026-01",
+      late: "2026-06",
+    },
+    {
+      type: "week",
+      value: "2026-W11",
+      min: "2026-W09",
+      max: "2026-W15",
+      early: "2026-W02",
+      late: "2026-W30",
+    },
+  ] as const
+
+  for (const t of types) {
+    describe(t.type, () => {
+      const input = () => $<HTMLInputElement>("[name=when]")
+      function When({
+        mode,
+        defaultValue,
+        bounds = false,
+      }: {
+        mode?: DilekceMode
+        defaultValue?: string
+        bounds?: boolean
+      }) {
+        return (
+          <Dilekce mode={mode} onSubmit={prevent}>
+            <DilekceField name="when" label="When">
+              <DilekceInput
+                type={t.type}
+                defaultValue={defaultValue}
+                min={bounds ? t.min : undefined}
+                max={bounds ? t.max : undefined}
+              />
+            </DilekceField>
+            <button type="submit">Go</button>
+            <button type="reset">Reset</button>
+          </Dilekce>
+        )
+      }
+
+      test("a native input, named by its label, with the value as the browser writes it", async () => {
+        const screen = await render(<When defaultValue={t.value} />)
+        await expect.element(screen.getByLabelText("When")).toBeVisible()
+        expect(input().type).toBe(t.type)
+        expect(input().value).toBe(t.value)
+      })
+
+      test("min and max say Too low and Too high", async () => {
+        const screen = await render(<When bounds />)
+        await userEvent.fill(input(), t.early)
+        await screen.getByRole("button", { name: "Go" }).click()
+        expect(errorOf("when")).toBe("Too low")
+        await userEvent.fill(input(), t.late)
+        await userEvent.tab()
+        expect(errorOf("when")).toBe("Too high")
+        await userEvent.fill(input(), t.value)
+        await expect.poll(() => errorOf("when")).toBeNull()
+      })
+
+      test("empty is tracked from the value: typed, written, reset", async () => {
+        const screen = await render(<When />)
+        expect(input().hasAttribute("data-empty")).toBe(true)
+        await userEvent.fill(input(), t.value)
+        await expect.poll(() => input().hasAttribute("data-empty")).toBe(false)
+        await screen.getByRole("button", { name: "Reset" }).click()
+        await expect.poll(() => input().hasAttribute("data-empty")).toBe(true)
+        await screen.rerender(<When defaultValue={t.value} />)
+        expect(input().hasAttribute("data-empty")).toBe(false)
+      })
+
+      test("filled: a dash when empty, the value when not, and it can't be edited", async () => {
+        const screen = await render(
+          <Dilekce mode="filled">
+            <DilekceRow>
+              <DilekceField name="empty" label="Empty">
+                <DilekceInput type={t.type} />
+              </DilekceField>
+              <DilekceField name="full" label="Full">
+                <DilekceInput type={t.type} defaultValue={t.value} />
+              </DilekceField>
+            </DilekceRow>
+          </Dilekce>,
+        )
+        expect(style(fieldOf("empty"), "::after").content).toContain("—")
+        expect(style(fieldOf("full"), "::after").content).not.toContain("—")
+        // The editor's format ("mm/dd/yyyy") isn't left showing beside the dash.
+        const empty = $<HTMLInputElement>("[name=empty]")
+        expect(style(empty).color).toBe("rgba(0, 0, 0, 0)")
+        expect(style($("[name=full]")).color).not.toBe("rgba(0, 0, 0, 0)")
+        expect(empty.readOnly).toBe(true)
+        // Read-only: typing doesn't fill it.
+        empty.focus()
+        await userEvent.keyboard("2026")
+        expect(empty.value).toBe("")
+        // No copy button on an empty value; one that copies the value on a full one.
+        expect(style(fieldOf("empty").querySelector("[data-slot=dilekce-copy]")!).display).toBe(
+          "none",
+        )
+        await expect.element(screen.getByRole("button", { name: "Copy Full" })).toBeInTheDocument()
+      })
+
+      test("the editor follows the dark class: color-scheme", async () => {
+        await render(<When defaultValue={t.value} />)
+        expect(style(input()).colorScheme).toContain("normal")
+        document.documentElement.classList.add("dark")
+        await sleep(50)
+        expect(style(input()).colorScheme).toBe("dark")
+      })
+    })
+  }
+
+  test("the picker button is a mask painted with the muted token, CanvasText in forced colors", async () => {
+    await render(
+      <Dilekce>
+        <DilekceField name="when" label="When">
+          <DilekceInput type="date" />
+        </DilekceField>
+        <DilekceField name="at" label="At">
+          <DilekceInput type="time" />
+        </DilekceField>
+      </Dilekce>,
+    )
+    const rules = rulesMentioning("::-webkit-calendar-picker-indicator")
+    const has = (media: string, css: string) =>
+      rules.some((rule) => rule.media === media && rule.css.includes(css))
+    expect(has("", "background-color: var(--muted-foreground)")).toBe(true)
+    expect(has("", "mask: var(--dk-picker)")).toBe(true)
+    expect(has("", "background-image: none")).toBe(true)
+    expect(has("", "background-color: var(--foreground)")).toBe(true)
+    expect(has("(forced-colors: active)", "background-color: canvastext")).toBe(true)
+    // Filled mode doesn't show it.
+    expect(has("", "display: none")).toBe(true)
+
+    // A calendar for dates, a clock for times.
+    const icon = (name: string) =>
+      decodeURIComponent($(`[name=${name}]`).style.getPropertyValue("--dk-picker"))
+    expect(icon("when")).toContain("<rect")
+    expect(icon("at")).toContain("<circle")
+  })
+
+  test("a date field is as tall as a text field beside it", async () => {
+    await render(
+      <Dilekce>
+        <DilekceRow>
+          <DilekceField name="a" label="Text">
+            <DilekceInput />
+          </DilekceField>
+          <DilekceField name="b" label="Date">
+            <DilekceInput type="date" />
+          </DilekceField>
+        </DilekceRow>
+      </Dilekce>,
+    )
+    const [a, b] = ["a", "b"].map((n) => $(`[name=${n}]`).getBoundingClientRect().height)
+    expect(Math.abs(a! - b!)).toBeLessThanOrEqual(2)
+  })
+
+  test("a ref still reaches the input", async () => {
+    const ref = React.createRef<HTMLInputElement>()
+    await render(
+      <Dilekce>
+        <DilekceField name="when" label="When">
+          <DilekceInput type="date" ref={ref} />
+        </DilekceField>
+      </Dilekce>,
+    )
+    expect(ref.current).toBe($("[name=when]"))
+  })
+})
+
+describe("new controls with the form's other features", () => {
+  const prevent = (event: React.FormEvent) => event.preventDefault()
+
+  test("the error summary lists them and its links focus them", async () => {
+    const screen = await render(
+      <Dilekce onSubmit={prevent}>
+        <DilekceSummary />
+        <DilekceField name="consent" label="Consent">
+          <DilekceCheckbox required>Agree</DilekceCheckbox>
+        </DilekceField>
+        <DilekceField name="sms" label="Alerts">
+          <DilekceSwitch required>SMS</DilekceSwitch>
+        </DilekceField>
+        <DilekceField name="invoice" label="Invoice">
+          <DilekceFile required />
+        </DilekceField>
+        <DilekceField name="when" label="When">
+          <DilekceInput type="date" required />
+        </DilekceField>
+        <button type="submit">Go</button>
+      </Dilekce>,
+    )
+    await screen.getByRole("button", { name: "Go" }).click()
+    const links = [
+      ...document.querySelectorAll<HTMLAnchorElement>("[data-slot=dilekce-summary-link]"),
+    ]
+    expect(links.map((a) => a.textContent)).toEqual([
+      "Consent: Required",
+      "Alerts: Required",
+      "Invoice: Required",
+      "When: Required",
+    ])
+    for (const [index, name] of ["consent", "sms", "invoice", "when"].entries()) {
+      links[index]!.click()
+      expect(document.activeElement).toBe($(`[name=${name}]`))
+    }
+  })
+
+  for (const theme of ["light", "dark"] as const) {
+    test(`${theme}: the text beside a checkbox or switch keeps 4.5:1, on, off and filled`, async () => {
+      document.documentElement.classList.toggle("dark", theme === "dark")
+      for (const mode of ["edit", "filled"] as const) {
+        const screen = await render(
+          <Dilekce mode={mode}>
+            <DilekceField name="a" label="A">
+              <DilekceCheckbox defaultChecked>On</DilekceCheckbox>
+            </DilekceField>
+            <DilekceField name="b" label="B">
+              <DilekceSwitch>Off</DilekceSwitch>
+            </DilekceField>
+            <DilekceField name="c" label="C">
+              <DilekceFile />
+            </DilekceField>
+          </Dilekce>,
+        )
+        await sleep(250)
+        for (const name of ["a", "b"]) {
+          const field = fieldOf(name)
+          const text = field.querySelector("label")!
+          expect(
+            ratio(style(text).color, style(field).backgroundColor),
+            `${theme} ${mode} ${name}`,
+          ).toBeGreaterThanOrEqual(4.5)
+        }
+        // The empty file name, muted.
+        if (mode === "edit") {
+          expect(
+            ratio(style($("[name=c]")).color, style(fieldOf("c")).backgroundColor),
+          ).toBeGreaterThanOrEqual(4.5)
+        }
+        await screen.unmount()
+      }
+    })
+  }
+
+  test("forced colors: a checked checkbox differs from an unchecked one, and the file button has an edge", async () => {
+    await emulate([{ name: "forced-colors", value: "active" }])
+    await render(
+      <Dilekce>
+        <DilekceField name="a" label="A">
+          <DilekceCheckbox defaultChecked>On</DilekceCheckbox>
+        </DilekceField>
+        <DilekceField name="b" label="B">
+          <DilekceCheckbox>Off</DilekceCheckbox>
+        </DilekceField>
+        <DilekceField name="c" label="C">
+          <DilekceFile />
+        </DilekceField>
+      </Dilekce>,
+    )
+    expect(style($("[name=a]")).backgroundColor).not.toBe(style($("[name=b]")).backgroundColor)
+    expect(style($("[name=a]").nextElementSibling!).display).not.toBe("none")
+    expect(style($("[name=c]"), "::file-selector-button").borderTopWidth).toBe("1px")
   })
 })
