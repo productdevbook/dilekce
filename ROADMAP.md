@@ -5,6 +5,24 @@ competing libraries have. The full reports, with evidence and reproductions, are
 [`docs/audit/`](docs/audit/). **P0** breaks for real users, **P1** most users hit it, **P2** worth having,
 **P3** nice to have. Effort: S hours, M a day, L more.
 
+## Status (2026-10-18)
+
+Done, each with regression tests (267 in total), reviewed in a fresh context and checked in a browser:
+P0 #1, #2; P1 #4–#21; the P2 accessibility items (steppers, copy target, outlines, affixes, reduced
+motion); P2 async replay with edited values; and the findings of two follow-up reviews
+(`docs/audit/` keeps the original reports). Validators also get an `AbortSignal`, and a check that
+throws now fails closed.
+
+Open:
+
+- **#3 Publish.** Needs a decision: the GitHub repo (public or private) and where `/r/*.json` is hosted.
+- **#22 Integration recipes** with tests: react-hook-form, TanStack Form, Conform, server actions.
+- **Decision:** should a server error keep blocking resubmit until the field is edited (current), or
+  be advisory (P2, correctness #9)?
+- The rest of P2 and P3 below: RTL, print header and signature line, `<datalist>`, `mode` per section,
+  a form-level error slot, registry examples and versioning, Next Server Component message constants,
+  iOS minus key, Safari IME, label truncation on touch at 390px.
+
 ## P0: fix before anyone installs it
 
 | #   | What                                                                                                                                                                                                              | Effort | Source         |
