@@ -102,23 +102,25 @@ its own short message and focus goes to the first one that needs attention.
 
 ## Components
 
-| Component              | Renders                   | Notes                                                                                                             |
-| ---------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `Dilekce`              | `<form>`                  | `mode`, `density`, `focus`, `messages`, `errors`, `schema`, `defaultValues`, `advance`, `warnUnsaved`, `copyable` |
-| `DilekceSummary`       | `<div>`                   | The error summary: links to the invalid fields after a stopped submit                                             |
-| `DilekceSection`       | `<fieldset>` + `<legend>` | `legend` becomes a full-width band                                                                                |
-| `DilekceRow`           | `<div>`                   | Cells share it by `span`                                                                                          |
-| `DilekceField`         | One cell                  | `label`, `name`, `span`, `description`, `error`, `messages`, `validate`                                           |
-| `DilekceInput`         | `<input>`                 | Any `type`; `leading` and `trailing` affixes                                                                      |
-| `DilekceTextarea`      | `<textarea>`              | Grows with its text where `field-sizing` is supported                                                             |
-| `DilekceSelect`        | `<select>`                | `options`, `placeholder`                                                                                          |
-| `DilekceNumber`        | `<input type="number">`   | −/+ steppers that repeat while held; drag across the label to scrub; `leading`, `trailing`                        |
-| `DilekceRadioGroup`    | Native radios             | `options`, `value`, `defaultValue`, `onValueChange`                                                               |
-| `DilekceCheckboxGroup` | Native checkboxes         | Same, with `string[]`; `required` means at least one; uncontrolled unless you pass `value`, so reset clears it    |
-| `DilekceCheckbox`      | One native checkbox       | A consent, "same as billing": `children` is its text, which names it; `required` works; see below                 |
-| `DilekceSwitch`        | `<input role="switch">`   | A checkbox drawn as a track and a thumb; same text, value and rules as `DilekceCheckbox`                          |
-| `DilekceFile`          | `<input type="file">`     | `accept`, `multiple`; the browser's button restyled; `required` works; see below                                  |
-| `DilekceActions`       | `<div>`                   | The form's last row. Put your shadcn `<Button>`s here, primary last                                               |
+| Component              | Renders                   | Notes                                                                                                                                    |
+| ---------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `Dilekce`              | `<form>`                  | `mode`, `density`, `focus`, `messages`, `errors`, `schema`, `defaultValues`, `advance`, `warnUnsaved`, `copyable`, `onEdit`, `emptyText` |
+| `DilekceSummary`       | `<div>`                   | The error summary: links to the invalid fields after a stopped submit                                                                    |
+| `DilekceSection`       | `<fieldset>` + `<legend>` | `legend` becomes a full-width band                                                                                                       |
+| `DilekceRow`           | `<div>`                   | Cells share it by `span`                                                                                                                 |
+| `DilekceField`         | One cell                  | `label`, `name`, `span`, `description`, `error`, `messages`, `validate`, `edit`                                                          |
+| `DilekceRepeat`        | `<div>`                   | "Add another" rows: `name`, `min`, `max`, `defaultCount`, `addLabel`, `onRowsChange`; see below                                          |
+| `DilekceRepeatRemove`  | A narrow cell             | The remove button of a repeater's row; put it last in the `DilekceRow`                                                                   |
+| `DilekceInput`         | `<input>`                 | Any `type`; `leading` and `trailing` affixes                                                                                             |
+| `DilekceTextarea`      | `<textarea>`              | Grows with its text where `field-sizing` is supported                                                                                    |
+| `DilekceSelect`        | `<select>`                | `options`, `placeholder`                                                                                                                 |
+| `DilekceNumber`        | `<input type="number">`   | −/+ steppers that repeat while held; drag across the label to scrub; `leading`, `trailing`                                               |
+| `DilekceRadioGroup`    | Native radios             | `options`, `value`, `defaultValue`, `onValueChange`                                                                                      |
+| `DilekceCheckboxGroup` | Native checkboxes         | Same, with `string[]`; `required` means at least one; uncontrolled unless you pass `value`, so reset clears it                           |
+| `DilekceCheckbox`      | One native checkbox       | A consent, "same as billing": `children` is its text, which names it; `required` works; see below                                        |
+| `DilekceSwitch`        | `<input role="switch">`   | A checkbox drawn as a track and a thumb; same text, value and rules as `DilekceCheckbox`                                                 |
+| `DilekceFile`          | `<input type="file">`     | `accept`, `multiple`; the browser's button restyled; `required` works; see below                                                         |
+| `DilekceActions`       | `<div>`                   | The form's last row. Put your shadcn `<Button>`s here, primary last                                                                      |
 
 ## Validation
 
@@ -147,7 +149,8 @@ import { dilekceMessages } from "@/components/ui/dilekce"
 
 Beyond the validity keys (`DilekceMessageKey` is the full set), `messages`
 also holds `pending`, `invalidOne`, `invalidMany` (write `{count}` in it),
-`copy`, `copied` and `summaryTitle`.
+`copy`, `copied`, `summaryTitle`, `add`, `remove`, `removeRow` and `change`
+(write `{index}` in `removeRow`, `rowAdded` and `rowRemoved`).
 
 ### Your own rules
 
@@ -445,6 +448,60 @@ set it:
 ```tsx
 <Dilekce mode="filled" className="[--dk-ink:var(--color-blue-600)]">
 ```
+
+### Check your answers
+
+In filled mode, `onEdit` gives every field a "Change" button beside Copy,
+named "Change <label>". Switch back to edit mode and focus the field; the
+values are still there, because `mode` is a prop on the same tree:
+
+```tsx
+<Dilekce
+  mode={mode}
+  emptyText="Not provided"
+  onEdit={({ name, label, element }) => {
+    flushSync(() => setMode("edit"))
+    element.focus()
+  }}
+>
+```
+
+A field's own `edit` overrides it: a string renders a link
+(`<a href>`, for a multi-page flow), a function a button, `false` hides it.
+`emptyText` replaces the dash of an empty field with real text, which screen
+readers read. Change is always visible (not only on hover) and, like Copy, is
+hidden in print.
+
+## Repeating rows
+
+```tsx
+<DilekceRepeat name="passengers" min={1} max={6} addLabel="Add passenger">
+  {(row) => (
+    <DilekceRow>
+      <DilekceField name={row.name("fullName")} label="Name" span={2}>
+        <DilekceInput required />
+      </DilekceField>
+      <DilekceField name={row.name("age")} label="Age">
+        <DilekceNumber min={0} />
+      </DilekceField>
+      <DilekceRepeatRemove />
+    </DilekceRow>
+  )}
+</DilekceRepeat>
+```
+
+`row` is `{ index, key, name(field), remove() }`. Names are by position
+(`passengers.0.fullName`), so values nest into `passengers: [{ fullName, age }]`
+for `onValidSubmit` and a schema, and `defaultValues` fills the rows (its
+number of rows is the starting count, unless you pass `defaultCount`, which
+otherwise is `max(min, 1)`). Rows keep a stable `key`, so after removing the
+first row the second becomes `passengers.0` and keeps what was typed in it.
+Adding focuses the new row's first control and removing the same position's
+(else the previous row's, else the add button); both are announced ("Row 2
+added"). Remove is disabled at `min` and the add button goes at `max`. Add and
+remove are hidden in filled mode and print, a reset brings back the default
+rows, and added or removed rows make the form dirty. `onRowsChange(count)`
+hears each change.
 
 ## Styling
 

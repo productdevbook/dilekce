@@ -19,6 +19,12 @@ export type DilekceMessageKey =
   | "copy"
   | "copied"
   | "summaryTitle"
+  | "add"
+  | "remove"
+  | "removeRow"
+  | "rowAdded"
+  | "rowRemoved"
+  | "change"
 export type DilekceMessages = Partial<Record<DilekceMessageKey, string>>
 /** Errors from outside the browser, such as a server: field name → message. */
 export type DilekceErrors = Record<string, string | string[] | null | undefined>
@@ -140,6 +146,16 @@ export interface DilekceInvalidField {
   element: HTMLElement
 }
 
+/** The field a "Change" action was pressed on, in a filled form. */
+export interface DilekceEditField {
+  /** The control's name, else the field's; empty when it has neither. */
+  name: string
+  /** The field label's text. */
+  label: string
+  /** The field's first control: switch to edit mode, then focus it. */
+  element: HTMLElement
+}
+
 type DefaultScalar = string | number | boolean | null | undefined
 /** A value `defaultValues` can hold: a scalar, a list, or nested objects and arrays. */
 export type DilekceDefaultValue =
@@ -188,6 +204,12 @@ export const dilekceMessages = {
     copy: "Copy",
     copied: "Copied",
     summaryTitle: "There is a problem",
+    add: "Add another",
+    remove: "Remove",
+    removeRow: "Remove row {index}",
+    rowAdded: "Row {index} added",
+    rowRemoved: "Row {index} removed",
+    change: "Change",
   },
   tr: {
     valueMissing: "Zorunlu",
@@ -205,6 +227,12 @@ export const dilekceMessages = {
     copy: "Kopyala",
     copied: "Kopyalandı",
     summaryTitle: "Bir sorun var",
+    add: "Bir tane daha ekle",
+    remove: "Kaldır",
+    removeRow: "{index}. satırı kaldır",
+    rowAdded: "{index}. satır eklendi",
+    rowRemoved: "{index}. satır kaldırıldı",
+    change: "Değiştir",
   },
 } satisfies Record<string, DilekceMessages>
 
@@ -323,6 +351,13 @@ interface FormContextValue {
   reportField: (field: HTMLElement | null, message: string | null) => void
   /** Applies `defaultValues` to the controls under `root`, e.g. a field that mounted late. */
   applyDefaults: (root: ParentNode) => void
+  /** How many rows `defaultValues` holds for a repeater's name; undefined when it says nothing. */
+  defaultRows: (name: string) => number | undefined
+  /** A "Change" button is wanted on every filled field (the form has `onEdit`). */
+  canEdit: boolean
+  edit: (field: DilekceEditField) => void
+  /** Replaces the dash of an empty field in filled mode. */
+  emptyText: string | undefined
   summary: SummaryStore
 }
 
@@ -694,6 +729,19 @@ function flattenDefaults(values: DilekceDefaultValues | undefined) {
   return out
 }
 
+/** The rows `defaultValues` holds for a repeater: `passengers.0.name`, … give 1 + the highest index. */
+function countRows(defaults: Map<string, DefaultEntry>, name: string) {
+  const prefix = `${name}.`
+  let rows = 0
+  for (const key of defaults.keys()) {
+    if (!key.startsWith(prefix)) continue
+    const index = /^(\d+)(?:\.|$)/.exec(key.slice(prefix.length))
+    if (index?.[1]) rows = Math.max(rows, Number(index[1]) + 1)
+  }
+  // An empty list is an answer too: no rows.
+  return rows > 0 ? rows : defaults.has(name) ? 0 : undefined
+}
+
 /** Puts a control's DOM defaults back to what its markup said, to restore later. */
 function defaultsOf(el: FormControl): () => void {
   if (el instanceof HTMLSelectElement) {
@@ -812,6 +860,17 @@ export interface DilekceProps<
   /** In filled mode, each value gets a copy button. On by default. */
   copyable?: boolean | undefined
   /**
+   * Check your answers: in filled mode, each field gets a "Change" button next
+   * to Copy that calls this with the field. Switch to `edit` and focus
+   * `element`. A field's own `edit` overrides it (`false` hides it).
+   */
+  onEdit?: ((field: DilekceEditField) => void) | undefined
+  /**
+   * What an empty field says in filled mode, in place of the dash: "Not
+   * provided". Real text, so assistive technology reads it.
+   */
+  emptyText?: string | undefined
+  /**
    * Any Standard Schema (Zod, Valibot, ArkType, …) run over the form's values
    * once the browser's constraints and the field's own `validate` pass: on
    * submit for every field, on blur and live for the one being edited. An
@@ -846,6 +905,8 @@ function Dilekce<S extends StandardSchemaV1 | undefined = undefined>({
   warnUnsaved = false,
   onInvalidSubmit,
   copyable = true,
+  onEdit,
+  emptyText,
   schema,
   onValidSubmit,
   defaultValues,
@@ -973,6 +1034,14 @@ function Dilekce<S extends StandardSchemaV1 | undefined = undefined>({
       selfReset.current = false
     }
   }, [flatDefaults])
+
+  const defaultRows = React.useCallback((name: string) => countRows(defaultsRef.current, name), [])
+  const editRef = React.useRef(onEdit)
+  React.useInsertionEffect(() => {
+    editRef.current = onEdit
+  })
+  const edit = React.useCallback((field: DilekceEditField) => editRef.current?.(field), [])
+  const canEdit = onEdit != null
 
   React.useLayoutEffect(settle, [settle])
 
@@ -1110,6 +1179,10 @@ function Dilekce<S extends StandardSchemaV1 | undefined = undefined>({
       runSchema,
       reportField,
       applyDefaults,
+      defaultRows,
+      canEdit,
+      edit,
+      emptyText,
       summary,
     }),
     [
@@ -1124,6 +1197,10 @@ function Dilekce<S extends StandardSchemaV1 | undefined = undefined>({
       runSchema,
       reportField,
       applyDefaults,
+      defaultRows,
+      canEdit,
+      edit,
+      emptyText,
       summary,
     ],
   )
@@ -1412,6 +1489,264 @@ function DilekceRow({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 /* -------------------------------------------------------------------------- */
+/*                                  Repeater                                  */
+/* -------------------------------------------------------------------------- */
+
+/** What a row of a `DilekceRepeat` is given. */
+export interface DilekceRepeatRow {
+  /** Where the row is now: 0 for the first. It changes when an earlier row is removed. */
+  index: number
+  /** Stable for the row's life, whatever its index: a React key for your own lists. */
+  key: string
+  /** A control's name in this row: `passengers.<index>.<field>`. */
+  name: (field: string) => string
+  /** Removes this row (not below `min`). */
+  remove: () => void
+}
+
+interface RepeatRowContextValue {
+  index: number
+  remove: () => void
+  canRemove: boolean
+}
+
+const RepeatRowContext = React.createContext<RepeatRowContextValue | null>(null)
+
+export interface DilekceRepeatProps extends Omit<
+  React.ComponentProps<"div">,
+  "children" | "defaultValue"
+> {
+  /** The list's name: its rows' controls are named `<name>.<index>.<field>`, so values nest. */
+  name: string
+  /** Fewest rows; Remove is disabled at it. Default 0. */
+  min?: number | undefined
+  /** Most rows; the add button goes away at it. Default unlimited. */
+  max?: number | undefined
+  /**
+   * Rows at the start and after a reset. Default: the rows `defaultValues`
+   * holds for `name`, else `max(min, 1)`.
+   */
+  defaultCount?: number | undefined
+  /** The add button's text; the `add` message by default. */
+  addLabel?: React.ReactNode | undefined
+  /** Renders one row: `row.name("field")` names its controls. */
+  children: (row: DilekceRepeatRow) => React.ReactNode
+  /** Called with the new count when a row is added or removed, and when a reset changes it. */
+  onRowsChange?: ((count: number) => void) | undefined
+}
+
+const rangeOf = (count: number) => Array.from({ length: count }, (_, index) => index)
+
+/**
+ * "Add another", like GOV.UK's pattern: rows of fields with an add button and
+ * a remove button per row. Rows keep a stable key, but their names are by
+ * position, so after removing the first row the second is `name.0.*` and keeps
+ * what was typed in it. Adding focuses the new row's first control and removing
+ * the same position's (else the previous row's, else the add button); both are
+ * announced. A form reset brings back the default rows.
+ */
+function DilekceRepeat({
+  name,
+  min = 0,
+  max = Infinity,
+  defaultCount,
+  addLabel,
+  children,
+  onRowsChange,
+  className,
+  ref,
+  ...props
+}: DilekceRepeatProps) {
+  const form = useForm()
+  const rootRef = React.useRef<HTMLDivElement>(null)
+  const mergedRef = useMergedRef(rootRef, ref)
+  const messages = form?.messages ?? dilekceMessages.en
+
+  const startCount = () =>
+    Math.min(max, Math.max(min, defaultCount ?? form?.defaultRows(name) ?? Math.max(min, 1)))
+  const latest = React.useRef({ startCount, onRowsChange, max, min })
+  React.useInsertionEffect(() => {
+    latest.current = { startCount, onRowsChange, max, min }
+  })
+
+  // The rows' keys, in order: never an index, so a row keeps its DOM when an earlier one goes.
+  const [keys, setKeys] = React.useState(() => rangeOf(startCount()))
+  const keysRef = React.useRef(keys)
+  const nextKey = React.useRef(keys.length)
+  // The keys the form started with: a reset that finds them untouched leaves the rows alone.
+  const pristine = React.useRef(keys)
+  const commit = (next: number[]) => {
+    keysRef.current = next
+    setKeys(next)
+  }
+
+  // What the user just did, for the focus and the announcement once the rows have rendered.
+  const action = React.useRef<{ type: "add" | "remove"; index: number } | null>(null)
+  const add = () => {
+    const current = keysRef.current
+    if (current.length >= max) return
+    action.current = { type: "add", index: current.length }
+    commit([...current, nextKey.current++])
+  }
+  const removeAt = (key: number) => {
+    const current = keysRef.current
+    const index = current.indexOf(key)
+    if (index < 0 || current.length <= min) return
+    action.current = { type: "remove", index }
+    commit(current.filter((_, at) => at !== index))
+  }
+
+  const announce = form?.announce
+  const measure = form?.measure
+  React.useLayoutEffect(() => {
+    // Rows came or went: dirty follows.
+    measure?.()
+    const done = action.current
+    action.current = null
+    const root = rootRef.current
+    if (!done || !root) return
+    const rows = root.querySelectorAll<HTMLElement>(":scope > [data-slot=dilekce-repeat-row]")
+    const focusRow = (row: HTMLElement | undefined) => {
+      const control = [...(row?.querySelectorAll<HTMLElement>(CONTROL) ?? [])].find(
+        (el) => !isDisabled(el),
+      )
+      control?.focus()
+      return control != null
+    }
+    if (done.type === "add") {
+      focusRow(rows[done.index])
+    } else if (!focusRow(rows[Math.min(done.index, rows.length - 1)])) {
+      root.querySelector<HTMLElement>("[data-slot=dilekce-repeat-add] button")?.focus()
+    }
+    const text = done.type === "add" ? messages.rowAdded : messages.rowRemoved
+    announce?.((text ?? "").replace("{index}", String(done.index + 1)))
+    // Only the rows changing is a reason to run again.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [keys])
+
+  const count = keys.length
+  const reported = React.useRef(count)
+  React.useEffect(() => {
+    if (reported.current === count) return
+    reported.current = count
+    latest.current.onRowsChange?.(count)
+  }, [count])
+
+  // A reset puts the default rows back. Rows left as they started stay as they are.
+  React.useEffect(() => {
+    const element = rootRef.current?.closest("form")
+    if (!element) return
+    const onReset = () => {
+      const wanted = latest.current.startCount()
+      const current = keysRef.current
+      if (current.length === wanted && current.every((key, at) => key === pristine.current[at])) {
+        return
+      }
+      const fresh = rangeOf(wanted).map(() => nextKey.current++)
+      pristine.current = fresh
+      commit(fresh)
+    }
+    element.addEventListener("reset", onReset)
+    return () => element.removeEventListener("reset", onReset)
+  }, [])
+
+  return (
+    <div
+      ref={mergedRef}
+      data-slot="dilekce-repeat"
+      data-count={count}
+      className={cn("flex flex-col gap-px forced-colors:gap-0", className)}
+      {...props}
+    >
+      {keys.map((key, index) => (
+        <RepeatRowContext.Provider
+          key={key}
+          value={{ index, remove: () => removeAt(key), canRemove: count > min }}
+        >
+          <div data-slot="dilekce-repeat-row" data-index={index} className="contents">
+            {children({
+              index,
+              key: String(key),
+              name: (field) => `${name}.${index}.${field}`,
+              remove: () => removeAt(key),
+            })}
+          </div>
+        </RepeatRowContext.Provider>
+      ))}
+      {count < max && (
+        <div
+          data-slot="dilekce-repeat-add"
+          className="flex bg-muted px-(--dk-px) py-(--dk-py) group-data-[mode=filled]/dilekce:hidden forced-colors:border forced-colors:border-[CanvasText] print:hidden"
+        >
+          <button
+            type="button"
+            onClick={add}
+            className="inline-flex min-h-6 cursor-pointer items-center gap-1.5 rounded-sm px-1 font-mono text-(length:--dk-label) leading-[1.3] font-medium tracking-[0.06em] text-foreground uppercase [--dk-focus:var(--primary)] hover:bg-foreground/8 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--dk-focus)"
+          >
+            <svg
+              viewBox="0 0 10 10"
+              aria-hidden="true"
+              className="size-2.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+            >
+              <path d="M5 1v8M1 5h8" />
+            </svg>
+            {addLabel ?? messages.add}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The remove cell of a repeater's row: a narrow cell with a button named
+ * "Remove row N". Put it last in the `DilekceRow`. Disabled at the repeater's
+ * `min`; not shown in filled mode or print.
+ */
+function DilekceRepeatRemove({ className, ...props }: React.ComponentProps<"div">) {
+  const row = React.useContext(RepeatRowContext)
+  const messages = useForm()?.messages ?? dilekceMessages.en
+  if (!row) return null
+  return (
+    <div
+      data-slot="dilekce-repeat-remove"
+      className={cn(
+        "flex flex-none items-end bg-background px-(--dk-px) py-(--dk-py) group-data-[mode=filled]/dilekce:hidden forced-colors:border forced-colors:border-[CanvasText] @max-[30rem]/dilekce:grow print:hidden",
+        className,
+      )}
+      {...props}
+    >
+      <button
+        type="button"
+        data-slot="dilekce-repeat-remove-button"
+        disabled={!row.canRemove}
+        // The visible word stays inside the name, so voice control can say it.
+        aria-label={(messages.removeRow ?? "").replace("{index}", String(row.index + 1))}
+        onClick={row.remove}
+        className="inline-flex min-h-6 min-w-6 cursor-pointer items-center justify-center gap-1 rounded-sm px-1 font-mono text-(length:--dk-label) leading-[1.3] tracking-[0.02em] text-muted-foreground uppercase [--dk-focus:var(--primary)] hover:bg-foreground/8 hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--dk-focus) disabled:cursor-not-allowed disabled:opacity-55"
+      >
+        <svg
+          viewBox="0 0 10 10"
+          aria-hidden="true"
+          className="size-2.5"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+        >
+          <path d="m2 2 6 6M8 2 2 8" />
+        </svg>
+        {messages.remove}
+      </button>
+    </div>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
 /*                                   Summary                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -1567,6 +1902,12 @@ export interface DilekceFieldProps extends Omit<React.ComponentProps<"div">, "ch
    * the field after an edit, live once a message shows, and on submit.
    */
   validate?: DilekceValidator | undefined
+  /**
+   * The "Change" action in filled mode (check your answers): a string is a
+   * link's `href`, a function a button's handler, `false` hides it. Without
+   * this, the form's `onEdit` decides.
+   */
+  edit?: string | (() => void) | false | undefined
   children: React.ReactNode
 }
 
@@ -1578,6 +1919,7 @@ function DilekceField({
   error,
   messages,
   validate,
+  edit,
   className,
   style,
   children,
@@ -1616,6 +1958,8 @@ function DilekceField({
   const invalid = hasContent(message)
   const readOnly = form?.mode === "filled"
   const copyable = readOnly && (form?.copyable ?? true)
+  const changeable = readOnly && edit !== false && (edit != null || form?.canEdit === true)
+  const emptyText = readOnly ? form?.emptyText : undefined
 
   const all = React.useMemo(
     () => ({ ...(form?.messages ?? dilekceMessages.en), ...messages }),
@@ -1853,6 +2197,7 @@ function DilekceField({
   const descriptionId = `${id}-description`
   const errorId = `${id}-error`
   const copyId = `${id}-copy`
+  const changeId = `${id}-change`
   const describedBy =
     [description != null && descriptionId, invalid && errorId].filter(Boolean).join(" ") ||
     undefined
@@ -1916,7 +2261,12 @@ function DilekceField({
         data-pending={pending || undefined}
         aria-busy={pending || undefined}
         data-span={span}
-        className={cn(FIELD, className)}
+        className={cn(
+          FIELD,
+          // The empty text stands in for the dash.
+          emptyText != null && "group-data-[mode=filled]/dilekce:after:content-none!",
+          className,
+        )}
         style={{ flex: `${span} 1 calc(${span} * var(--dk-col))`, ...style }}
         onChange={(event) => {
           setDirty(true)
@@ -2006,54 +2356,102 @@ function DilekceField({
             {count.length}/{count.max}
           </span>
         )}
-        {copyable && (
-          <button
-            type="button"
-            data-slot="dilekce-copy"
-            aria-labelledby={`${copyId} ${labelId}`}
-            className={cn(
-              "-mt-1 inline-flex min-h-6 min-w-6 cursor-pointer items-center justify-center gap-1 self-start justify-self-end rounded-sm px-1 font-mono text-(length:--dk-label) leading-[1.3] tracking-[0.02em] text-muted-foreground opacity-0 transition-opacity duration-150 motion-reduce:transition-none [grid-area:error]",
-              "group-hover/field:opacity-100 hover:bg-foreground/8 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-(--dk-focus) pointer-coarse:opacity-100 data-copied:opacity-100",
-              // Nothing to copy: an empty field, or a group with nothing chosen.
-              "group-has-[:placeholder-shown]/field:hidden group-has-data-empty/field:hidden group-has-[[data-slot=dilekce-choices]]/field:group-not-has-checked/field:hidden group-has-[[data-slot=dilekce-toggle]]/field:group-not-has-checked/field:hidden",
-              "print:hidden",
-            )}
-            data-copied={copied || undefined}
-            onClick={async (event) => {
-              const field = event.currentTarget.closest<HTMLElement>("[data-slot=dilekce-field]")
-              if (!field) return
-              try {
-                await navigator.clipboard.writeText(displayText(field))
-                setCopied(true)
-                announce?.(`${labelOf()}: ${all.copied}`)
-                setTimeout(() => setCopied(false), 1200)
-              } catch {
-                // Clipboard blocked: the value is still there to select.
-              }
-            }}
+        {(copyable || changeable) && (
+          <span
+            data-slot="dilekce-field-actions"
+            className="-mt-1 inline-flex items-start gap-1 self-start justify-self-end [grid-area:error] print:hidden"
           >
-            <svg
-              viewBox="0 0 10 10"
-              aria-hidden="true"
-              className="size-2.5"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.2"
-              strokeLinejoin="round"
-            >
-              {copied ? (
-                <path d="M2 5.5 4.2 7.5 8 3" strokeLinecap="round" strokeWidth="1.5" />
+            {copyable && (
+              <button
+                type="button"
+                data-slot="dilekce-copy"
+                aria-labelledby={`${copyId} ${labelId}`}
+                className={cn(
+                  "inline-flex min-h-6 min-w-6 cursor-pointer items-center justify-center gap-1 rounded-sm px-1 font-mono text-(length:--dk-label) leading-[1.3] tracking-[0.02em] text-muted-foreground opacity-0 transition-opacity duration-150 motion-reduce:transition-none",
+                  "group-hover/field:opacity-100 hover:bg-foreground/8 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-(--dk-focus) pointer-coarse:opacity-100 data-copied:opacity-100",
+                  // Nothing to copy: an empty field, or a group with nothing chosen.
+                  "group-has-[:placeholder-shown]/field:hidden group-has-data-empty/field:hidden group-has-[[data-slot=dilekce-choices]]/field:group-not-has-checked/field:hidden group-has-[[data-slot=dilekce-toggle]]/field:group-not-has-checked/field:hidden",
+                  "print:hidden",
+                )}
+                data-copied={copied || undefined}
+                onClick={async (event) => {
+                  const field = event.currentTarget.closest<HTMLElement>(
+                    "[data-slot=dilekce-field]",
+                  )
+                  if (!field) return
+                  try {
+                    await navigator.clipboard.writeText(displayText(field))
+                    setCopied(true)
+                    announce?.(`${labelOf()}: ${all.copied}`)
+                    setTimeout(() => setCopied(false), 1200)
+                  } catch {
+                    // Clipboard blocked: the value is still there to select.
+                  }
+                }}
+              >
+                <svg
+                  viewBox="0 0 10 10"
+                  aria-hidden="true"
+                  className="size-2.5"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.2"
+                  strokeLinejoin="round"
+                >
+                  {copied ? (
+                    <path d="M2 5.5 4.2 7.5 8 3" strokeLinecap="round" strokeWidth="1.5" />
+                  ) : (
+                    <>
+                      <rect x="3.5" y="3.5" width="5" height="5" rx="1" />
+                      <path d="M6.5 3.5V2.5a1 1 0 0 0-1-1h-3a1 1 0 0 0-1 1v3a1 1 0 0 0 1 1h1" />
+                    </>
+                  )}
+                </svg>
+                <span id={copyId}>{copied ? all.copied : all.copy}</span>
+              </button>
+            )}
+            {changeable &&
+              (typeof edit === "string" ? (
+                <a
+                  data-slot="dilekce-change"
+                  href={edit}
+                  aria-labelledby={`${changeId} ${labelId}`}
+                  className={CHANGE}
+                >
+                  <span id={changeId}>{all.change}</span>
+                </a>
               ) : (
-                <>
-                  <rect x="3.5" y="3.5" width="5" height="5" rx="1" />
-                  <path d="M6.5 3.5V2.5a1 1 0 0 0-1-1h-3a1 1 0 0 0-1 1v3a1 1 0 0 0 1 1h1" />
-                </>
-              )}
-            </svg>
-            <span id={copyId}>{copied ? all.copied : all.copy}</span>
-          </button>
+                <button
+                  type="button"
+                  data-slot="dilekce-change"
+                  aria-labelledby={`${changeId} ${labelId}`}
+                  className={CHANGE}
+                  onClick={() => {
+                    if (typeof edit === "function") return edit()
+                    const field = fieldRef.current
+                    if (!field) return
+                    form?.edit({
+                      name: controlOf(field)?.name || name || "",
+                      label: labelOf(),
+                      element: controlOf(field) ?? field,
+                    })
+                  }}
+                >
+                  <span id={changeId}>{all.change}</span>
+                </button>
+              ))}
+          </span>
         )}
         {children}
+        {emptyText != null && (
+          // Real text, so it is read: shown only where the dash would be.
+          <span
+            data-slot="dilekce-empty"
+            className="pointer-events-none hidden self-start text-(length:--dk-text) leading-[1.4] text-muted-foreground [grid-area:control] group-has-[:placeholder-shown]/field:block group-has-data-empty/field:block"
+          >
+            {emptyText}
+          </span>
+        )}
         {description != null && (
           <p
             id={descriptionId}
@@ -2067,6 +2465,11 @@ function DilekceField({
     </FieldContext.Provider>
   )
 }
+
+const CHANGE = cn(
+  "inline-flex min-h-6 min-w-6 cursor-pointer items-center justify-center rounded-sm px-1 font-mono text-(length:--dk-label) leading-[1.3] tracking-[0.02em] text-muted-foreground underline underline-offset-2",
+  "hover:bg-foreground/8 hover:text-foreground focus-visible:outline-2 focus-visible:outline-(--dk-focus)",
+)
 
 let canvas: CanvasRenderingContext2D | null | undefined
 
@@ -3111,6 +3514,8 @@ export {
   DilekceInput,
   DilekceNumber,
   DilekceRadioGroup,
+  DilekceRepeat,
+  DilekceRepeatRemove,
   DilekceRow,
   DilekceSection,
   DilekceSelect,

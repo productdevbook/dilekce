@@ -16,6 +16,8 @@ import {
   DilekceInput,
   DilekceNumber,
   DilekceRadioGroup,
+  DilekceRepeat,
+  DilekceRepeatRemove,
   DilekceRow,
   DilekceSection,
   DilekceSelect,
@@ -3939,5 +3941,758 @@ describe("new controls with the form's other features", () => {
     expect(style($("[name=a]")).backgroundColor).not.toBe(style($("[name=b]")).backgroundColor)
     expect(style($("[name=a]").nextElementSibling!).display).not.toBe("none")
     expect(style($("[name=c]"), "::file-selector-button").borderTopWidth).toBe("1px")
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/*                         Repeater: "add another" rows                       */
+/* -------------------------------------------------------------------------- */
+
+describe("repeater", () => {
+  type RepeatProps = Partial<React.ComponentProps<typeof DilekceRepeat>>
+  function Passengers({
+    form = {},
+    ...props
+  }: RepeatProps & { form?: Partial<React.ComponentProps<typeof Dilekce>> }) {
+    return (
+      <Dilekce onSubmit={(event) => event.preventDefault()} {...form}>
+        <DilekceRepeat name="passengers" min={1} max={3} addLabel="Add passenger" {...props}>
+          {(row) => (
+            <DilekceRow>
+              <DilekceField name={row.name("fullName")} label="Name" span={2}>
+                <DilekceInput required />
+              </DilekceField>
+              <DilekceField name={row.name("age")} label="Age">
+                <DilekceNumber min={0} />
+              </DilekceField>
+              <DilekceRepeatRemove />
+            </DilekceRow>
+          )}
+        </DilekceRepeat>
+        <DilekceActions>
+          <button type="submit">Save</button>
+          <button type="reset">Reset</button>
+        </DilekceActions>
+      </Dilekce>
+    )
+  }
+  const names = () =>
+    [...document.querySelectorAll<HTMLInputElement>("[name^=passengers]")].map((el) => el.name)
+  const said = () => $("[role=status]").textContent
+  const rowsOf = () => document.querySelectorAll("[data-slot=dilekce-repeat-row]").length
+  const typeInto = (name: string, value: string) => {
+    const input = $<HTMLInputElement>(`[name="${name}"]`)
+    input.focus()
+    return userEvent.fill(input, value)
+  }
+
+  test("starts with max(min, 1) rows named by index, and nests into an array on submit", async () => {
+    const onValidSubmit = vi.fn()
+    const screen = await render(<Passengers form={{ onValidSubmit }} />)
+    expect(names()).toEqual(["passengers.0.fullName", "passengers.0.age"])
+    await screen.getByRole("button", { name: "Add passenger" }).click()
+    expect(names()).toEqual([
+      "passengers.0.fullName",
+      "passengers.0.age",
+      "passengers.1.fullName",
+      "passengers.1.age",
+    ])
+    await userEvent.fill($("[name='passengers.0.fullName']"), "Ada")
+    await userEvent.fill($("[name='passengers.0.age']"), "36")
+    await userEvent.fill($("[name='passengers.1.fullName']"), "Grace")
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect(onValidSubmit).toHaveBeenCalledTimes(1)
+    expect(onValidSubmit.mock.calls[0]![0]).toEqual({
+      passengers: [
+        { fullName: "Ada", age: "36" },
+        { fullName: "Grace", age: "" },
+      ],
+    })
+  })
+
+  test("adding focuses the first control of the new row and says so; max hides the add button", async () => {
+    const screen = await render(<Passengers />)
+    const add = screen.getByRole("button", { name: "Add passenger" })
+    await add.click()
+    expect(document.activeElement).toBe($("[name='passengers.1.fullName']"))
+    await expect.poll(said).toBe("Row 2 added")
+    await add.click()
+    expect(document.activeElement).toBe($("[name='passengers.2.fullName']"))
+    await expect.poll(said).toBe("Row 3 added")
+    expect(rowsOf()).toBe(3)
+    expect(document.querySelector("[data-slot=dilekce-repeat-add]")).toBeNull()
+  })
+
+  test("a row's remove button is named by its position and disabled at min", async () => {
+    const screen = await render(<Passengers defaultCount={2} />)
+    const first = screen.getByRole("button", { name: "Remove row 1" })
+    const second = screen.getByRole("button", { name: "Remove row 2" })
+    await expect.element(first).toBeEnabled()
+    expect(first.element().textContent).toBe("Remove")
+    // The 24px target.
+    const box = second.element().getBoundingClientRect()
+    expect(box.width).toBeGreaterThanOrEqual(24)
+    expect(box.height).toBeGreaterThanOrEqual(24)
+    await first.click()
+    // One row left, at min: nothing more to remove.
+    await expect.element(screen.getByRole("button", { name: "Remove row 1" })).toBeDisabled()
+  })
+
+  test("removing the first row keeps the others' values and renames them to the new positions", async () => {
+    const onValidSubmit = vi.fn()
+    const screen = await render(<Passengers defaultCount={3} form={{ onValidSubmit }} />)
+    await typeInto("passengers.0.fullName", "Ada")
+    await typeInto("passengers.1.fullName", "Grace")
+    await typeInto("passengers.2.fullName", "Edsger")
+    const second = $<HTMLInputElement>("[name='passengers.1.fullName']")
+    const third = $<HTMLInputElement>("[name='passengers.2.fullName']")
+    await screen.getByRole("button", { name: "Remove row 1" }).click()
+    // The same elements, one place earlier, with what was typed in them.
+    expect($("[name='passengers.0.fullName']")).toBe(second)
+    expect($("[name='passengers.1.fullName']")).toBe(third)
+    expect(second.value).toBe("Grace")
+    expect(third.value).toBe("Edsger")
+    expect(names().filter((n) => n.endsWith("fullName"))).toEqual([
+      "passengers.0.fullName",
+      "passengers.1.fullName",
+    ])
+    // Focus lands on the same position's first control; the rest is said.
+    expect(document.activeElement).toBe(second)
+    await expect.poll(said).toBe("Row 1 removed")
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect(onValidSubmit.mock.calls[0]![0]).toEqual({
+      passengers: [
+        { fullName: "Grace", age: "" },
+        { fullName: "Edsger", age: "" },
+      ],
+    })
+  })
+
+  test("removing the last row focuses the previous one; with min 0, the add button", async () => {
+    const screen = await render(<Passengers min={0} defaultCount={2} />)
+    await screen.getByRole("button", { name: "Remove row 2" }).click()
+    expect(document.activeElement).toBe($("[name='passengers.0.fullName']"))
+    await expect.poll(said).toBe("Row 2 removed")
+    await screen.getByRole("button", { name: "Remove row 1" }).click()
+    expect(rowsOf()).toBe(0)
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Add passenger" }).element(),
+    )
+    await screen.getByRole("button", { name: "Add passenger" }).click()
+    expect(rowsOf()).toBe(1)
+    expect(document.activeElement).toBe($("[name='passengers.0.fullName']"))
+  })
+
+  test("row.remove() and row.key work from the render function", async () => {
+    const seen: string[] = []
+    const screen = await render(
+      <Dilekce>
+        <DilekceRepeat name="tags" min={0} defaultCount={2}>
+          {(row) => {
+            seen.push(row.key)
+            return (
+              <DilekceRow>
+                <DilekceField name={row.name("v")} label={`Tag ${row.index}`}>
+                  <DilekceInput />
+                </DilekceField>
+                <button type="button" onClick={row.remove}>{`drop ${row.index}`}</button>
+              </DilekceRow>
+            )
+          }}
+        </DilekceRepeat>
+      </Dilekce>,
+    )
+    const keysBefore = new Set(seen)
+    expect(keysBefore.size).toBe(2)
+    seen.length = 0
+    await screen.getByRole("button", { name: "drop 0" }).click()
+    expect(rowsOf()).toBe(1)
+    // The surviving row kept its key, though it is row 0 now.
+    expect(seen).toHaveLength(1)
+    expect(keysBefore.has(seen[0]!)).toBe(true)
+    // Add is named from the message by default.
+    await expect.element(screen.getByRole("button", { name: "Add another" })).toBeVisible()
+  })
+
+  test("the row count starts from defaultValues, or defaultCount, clamped to min and max", async () => {
+    const people = [
+      { fullName: "Ada", age: 36 },
+      { fullName: "Grace", age: 85 },
+    ]
+    const screen = await render(<Passengers form={{ defaultValues: { passengers: people } }} />)
+    expect(rowsOf()).toBe(2)
+    expect($<HTMLInputElement>("[name='passengers.0.fullName']").value).toBe("Ada")
+    expect($<HTMLInputElement>("[name='passengers.1.age']").value).toBe("85")
+    await screen.unmount()
+
+    const counted = await render(
+      <Passengers defaultCount={3} form={{ defaultValues: { passengers: people } }} />,
+    )
+    expect(rowsOf()).toBe(3)
+    // The third row has no default.
+    expect($<HTMLInputElement>("[name='passengers.2.fullName']").value).toBe("")
+    await counted.unmount()
+
+    const capped = await render(
+      <Passengers max={1} form={{ defaultValues: { passengers: people } }} />,
+    )
+    expect(rowsOf()).toBe(1)
+    await capped.unmount()
+    await render(<Passengers min={2} />)
+    expect(rowsOf()).toBe(2)
+  })
+
+  test("a reset brings back the default rows and values; dirty counts added and removed rows", async () => {
+    const onDirtyChange = vi.fn()
+    const screen = await render(
+      <Passengers
+        form={{
+          onDirtyChange,
+          defaultValues: { passengers: [{ fullName: "Ada", age: 36 }] },
+        }}
+      />,
+    )
+    expect(onDirtyChange).not.toHaveBeenCalled()
+    await screen.getByRole("button", { name: "Add passenger" }).click()
+    await expect.poll(() => onDirtyChange.mock.calls.at(-1)?.[0]).toBe(true)
+    // An empty row less is clean again.
+    await screen.getByRole("button", { name: "Remove row 2" }).click()
+    await expect.poll(() => onDirtyChange.mock.calls.at(-1)?.[0]).toBe(false)
+
+    // Remove the default row, add two: reset restores Ada alone.
+    await screen.getByRole("button", { name: "Add passenger" }).click()
+    await screen.getByRole("button", { name: "Remove row 1" }).click()
+    await userEvent.fill($("[name='passengers.0.fullName']"), "Someone else")
+    await screen.getByRole("button", { name: "Add passenger" }).click()
+    expect(rowsOf()).toBe(2)
+    await screen.getByRole("button", { name: "Reset" }).click()
+    await expect.poll(rowsOf).toBe(1)
+    await expect.poll(() => $<HTMLInputElement>("[name='passengers.0.fullName']").value).toBe("Ada")
+    await expect.poll(() => onDirtyChange.mock.calls.at(-1)?.[0]).toBe(false)
+    expect($("[data-slot=dilekce]").hasAttribute("data-dirty")).toBe(false)
+  })
+
+  test("reset leaves untouched rows alone", async () => {
+    const screen = await render(<Passengers defaultCount={2} />)
+    const before = $("[name='passengers.1.fullName']")
+    await userEvent.fill(before, "x")
+    await screen.getByRole("button", { name: "Reset" }).click()
+    await expect.poll(() => (before as HTMLInputElement).value).toBe("")
+    expect($("[name='passengers.1.fullName']")).toBe(before)
+  })
+
+  test("onRowsChange hears adds, removes and a reset that changes the count", async () => {
+    const onRowsChange = vi.fn()
+    const screen = await render(<Passengers onRowsChange={onRowsChange} />)
+    expect(onRowsChange).not.toHaveBeenCalled()
+    await screen.getByRole("button", { name: "Add passenger" }).click()
+    await screen.getByRole("button", { name: "Add passenger" }).click()
+    await screen.getByRole("button", { name: "Remove row 2" }).click()
+    expect(onRowsChange.mock.calls.map((c) => c[0])).toEqual([2, 3, 2])
+    await screen.getByRole("button", { name: "Reset" }).click()
+    await expect.poll(() => onRowsChange.mock.calls.at(-1)?.[0]).toBe(1)
+  })
+
+  test("a schema's array issues reach the right row's field, even after a removal", async () => {
+    const schema = z.object({
+      passengers: z.array(
+        z.object({ fullName: z.string().min(1), age: z.coerce.number().max(120, "Too high") }),
+      ),
+    })
+    const screen = await render(
+      <Dilekce schema={schema} onSubmit={(event) => event.preventDefault()}>
+        <DilekceRepeat name="passengers" defaultCount={3}>
+          {(row) => (
+            <DilekceRow>
+              <DilekceField name={row.name("fullName")} label="Name">
+                <DilekceInput />
+              </DilekceField>
+              <DilekceField name={row.name("age")} label="Age">
+                <DilekceNumber />
+              </DilekceField>
+              <DilekceRepeatRemove />
+            </DilekceRow>
+          )}
+        </DilekceRepeat>
+        <button type="submit">Go</button>
+      </Dilekce>,
+    )
+    await userEvent.fill($("[name='passengers.0.fullName']"), "A")
+    await userEvent.fill($("[name='passengers.1.fullName']"), "B")
+    await userEvent.fill($("[name='passengers.1.age']"), "999")
+    await userEvent.fill($("[name='passengers.2.fullName']"), "C")
+    await screen.getByRole("button", { name: "Remove row 1" }).click()
+    await screen.getByRole("button", { name: "Go" }).click()
+    // The old row 1 is row 0 now, and it is the one with a bad age.
+    expect(errorOf("passengers.0.age")).toBe("Too high")
+    expect(errorOf("passengers.1.age")).toBeNull()
+    expect(errorOf("passengers.0.fullName")).toBeNull()
+  })
+
+  test("Enter advances across rows in order", async () => {
+    await render(<Passengers defaultCount={2} form={{ advance: true }} />)
+    $<HTMLInputElement>("[name='passengers.0.fullName']").focus()
+    await userEvent.keyboard("{Enter}")
+    expect(document.activeElement).toBe($("[name='passengers.0.age']"))
+    await userEvent.keyboard("{Enter}")
+    expect(document.activeElement).toBe($("[name='passengers.1.fullName']"))
+  })
+
+  test("filled mode and print hide the add and remove cells", async () => {
+    const filled = await render(<Passengers defaultCount={2} form={{ mode: "filled" }} />)
+    expect(style($("[data-slot=dilekce-repeat-add]")).display).toBe("none")
+    for (const cell of document.querySelectorAll("[data-slot=dilekce-repeat-remove]")) {
+      expect(style(cell).display).toBe("none")
+    }
+    await filled.unmount()
+
+    await render(<Passengers defaultCount={2} />)
+    expect(style($("[data-slot=dilekce-repeat-add]")).display).not.toBe("none")
+    await cdp().send("Emulation.setEmulatedMedia", { media: "print" })
+    try {
+      expect(style($("[data-slot=dilekce-repeat-add]")).display).toBe("none")
+      expect(style($("[data-slot=dilekce-repeat-remove]")).display).toBe("none")
+    } finally {
+      await cdp().send("Emulation.setEmulatedMedia", { media: "" })
+    }
+  })
+
+  test("the same form in filled mode keeps its rows and values", async () => {
+    const view = (mode: DilekceMode) => <Passengers defaultCount={2} form={{ mode }} />
+    const screen = await render(view("edit"))
+    await userEvent.fill($("[name='passengers.1.fullName']"), "Grace")
+    await screen.rerender(view("filled"))
+    expect($<HTMLInputElement>("[name='passengers.1.fullName']").value).toBe("Grace")
+    expect($<HTMLInputElement>("[name='passengers.1.fullName']").readOnly).toBe(true)
+    expect(rowsOf()).toBe(2)
+  })
+
+  test("Turkish messages name the buttons and the announcements", async () => {
+    const screen = await render(
+      <Passengers defaultCount={2} form={{ messages: dilekceMessages.tr }} addLabel={undefined} />,
+    )
+    await expect.element(screen.getByRole("button", { name: "1. satırı kaldır" })).toBeVisible()
+    expect(screen.getByRole("button", { name: "2. satırı kaldır" }).element().textContent).toBe(
+      "Kaldır",
+    )
+    await screen.getByRole("button", { name: "Bir tane daha ekle" }).click()
+    await expect.poll(said).toBe("3. satır eklendi")
+    await screen.getByRole("button", { name: "3. satırı kaldır" }).click()
+    await expect.poll(said).toBe("3. satır kaldırıldı")
+  })
+
+  test("the new strings exist in both languages", () => {
+    for (const key of ["add", "remove", "removeRow", "rowAdded", "rowRemoved", "change"] as const) {
+      expect(dilekceMessages.en[key], key).toBeTruthy()
+      expect(dilekceMessages.tr[key], key).toBeTruthy()
+    }
+  })
+
+  test("forced colors: the remove cell has a border and its button a focus outline", async () => {
+    await emulate([{ name: "forced-colors", value: "active" }])
+    const screen = await render(<Passengers defaultCount={2} />)
+    expect(style($("[data-slot=dilekce-repeat-remove]")).borderTopWidth).toBe("1px")
+    expect(style($("[data-slot=dilekce-repeat-add]")).borderTopWidth).toBe("1px")
+    for (const name of ["Remove row 1", "Add passenger"]) {
+      const button = screen.getByRole("button", { name }).element() as HTMLElement
+      button.focus()
+      await userEvent.keyboard("{Shift>}{Shift}")
+      await userEvent.tab({ shift: true })
+      await userEvent.tab()
+      expect(style(button).outlineStyle).toBe("solid")
+    }
+  })
+
+  for (const theme of ["light", "dark"] as const) {
+    test(`${theme}: the add and remove text keeps 4.5:1 and their focus 3:1`, async () => {
+      document.documentElement.classList.toggle("dark", theme === "dark")
+      const screen = await render(<Passengers defaultCount={2} />)
+      for (const [name, cell] of [
+        ["Remove row 1", "dilekce-repeat-remove"],
+        ["Add passenger", "dilekce-repeat-add"],
+      ] as const) {
+        const button = screen.getByRole("button", { name }).element() as HTMLElement
+        const background = style($(`[data-slot=${cell}]`)).backgroundColor
+        expect(rgba(background)[3]).toBe(255)
+        expect(ratio(style(button).color, background), `${theme} ${name}`).toBeGreaterThanOrEqual(
+          4.5,
+        )
+        await userEvent.tab()
+        button.focus()
+        await userEvent.tab({ shift: true })
+        await userEvent.tab()
+        expect(
+          ratio(style(button).outlineColor, background),
+          `${theme} ${name} focus`,
+        ).toBeGreaterThanOrEqual(3)
+      }
+    })
+  }
+})
+
+/* -------------------------------------------------------------------------- */
+/*                  Check your answers: Change and empty text                 */
+/* -------------------------------------------------------------------------- */
+
+describe("check your answers", () => {
+  const changes = () => [...document.querySelectorAll("[data-slot=dilekce-change]")]
+
+  function Answers(props: React.ComponentProps<typeof Dilekce>) {
+    return (
+      <Dilekce mode="filled" {...props}>
+        <DilekceRow>
+          <DilekceField name="name" label="Name">
+            <DilekceInput defaultValue="Ada" />
+          </DilekceField>
+          <DilekceField name="phone" label="Phone">
+            <DilekceInput type="tel" />
+          </DilekceField>
+          <DilekceField name="kind" label="Kind">
+            <DilekceSelect options={[{ value: "a", label: "Alpha" }]} />
+          </DilekceField>
+        </DilekceRow>
+      </Dilekce>
+    )
+  }
+
+  test("onEdit gives every filled field a Change button named with its label", async () => {
+    const onEdit = vi.fn()
+    const screen = await render(<Answers onEdit={onEdit} />)
+    expect(changes()).toHaveLength(3)
+    await screen.getByRole("button", { name: "Change Phone" }).click()
+    expect(onEdit).toHaveBeenCalledTimes(1)
+    expect(onEdit.mock.calls[0]![0]).toEqual({
+      name: "phone",
+      label: "Phone",
+      element: $("[name=phone]"),
+    })
+    // Empty fields can be changed too, and Copy sits beside it where there is something to copy.
+    await expect.element(screen.getByRole("button", { name: "Copy Name" })).toBeVisible()
+    expect(
+      style($("[name=phone]").closest(FIELD)!.querySelector("[data-slot=dilekce-copy]")!).display,
+    ).toBe("none")
+  })
+
+  test("no onEdit and edit mode have no Change buttons", async () => {
+    await render(
+      <>
+        <Answers />
+        <Answers mode="edit" onEdit={() => {}} />
+      </>,
+    )
+    expect(changes()).toHaveLength(0)
+  })
+
+  test("a field's edit overrides: a string is a link, a function a button, false hides it", async () => {
+    const onEdit = vi.fn()
+    const own = vi.fn()
+    const screen = await render(
+      <Dilekce mode="filled" onEdit={onEdit}>
+        <DilekceField name="a" label="Address" edit="/address?change=1">
+          <DilekceInput defaultValue="x" />
+        </DilekceField>
+        <DilekceField name="b" label="Phone" edit={own}>
+          <DilekceInput defaultValue="y" />
+        </DilekceField>
+        <DilekceField name="c" label="Secret" edit={false}>
+          <DilekceInput defaultValue="z" />
+        </DilekceField>
+        <DilekceField name="d" label="Plain">
+          <DilekceInput defaultValue="w" />
+        </DilekceField>
+      </Dilekce>,
+    )
+    const link = screen.getByRole("link", { name: "Change Address" })
+    expect(link.element().getAttribute("href")).toBe("/address?change=1")
+    await screen.getByRole("button", { name: "Change Phone" }).click()
+    expect(own).toHaveBeenCalledTimes(1)
+    expect(onEdit).not.toHaveBeenCalled()
+    expect(screen.getByRole("button", { name: "Change Secret" }).elements()).toHaveLength(0)
+    await screen.getByRole("button", { name: "Change Plain" }).click()
+    expect(onEdit).toHaveBeenCalledTimes(1)
+    expect(onEdit.mock.calls[0]![0].label).toBe("Plain")
+  })
+
+  test("a field's edit works without the form's onEdit", async () => {
+    const own = vi.fn()
+    const screen = await render(
+      <Dilekce mode="filled">
+        <DilekceField name="a" label="A" edit={own}>
+          <DilekceInput defaultValue="x" />
+        </DilekceField>
+        <DilekceField name="b" label="B">
+          <DilekceInput defaultValue="y" />
+        </DilekceField>
+      </Dilekce>,
+    )
+    expect(changes()).toHaveLength(1)
+    await screen.getByRole("button", { name: "Change A" }).click()
+    expect(own).toHaveBeenCalled()
+  })
+
+  test("Change switches back to edit, and the values are still there", async () => {
+    function Review() {
+      const [mode, setMode] = React.useState<DilekceMode>("edit")
+      return (
+        <Dilekce
+          mode={mode}
+          onEdit={({ element }) => {
+            flushSync(() => setMode("edit"))
+            element.focus()
+          }}
+        >
+          <DilekceField name="name" label="Name">
+            <DilekceInput />
+          </DilekceField>
+          <DilekceField name="city" label="City">
+            <DilekceInput />
+          </DilekceField>
+          <button type="button" onClick={() => setMode("filled")}>
+            Review
+          </button>
+        </Dilekce>
+      )
+    }
+    const screen = await render(<Review />)
+    await userEvent.fill($("[name=name]"), "Ada")
+    await userEvent.fill($("[name=city]"), "London")
+    await screen.getByRole("button", { name: "Review" }).click()
+    expect($<HTMLInputElement>("[name=city]").readOnly).toBe(true)
+    await screen.getByRole("button", { name: "Change City" }).click()
+    expect($<HTMLInputElement>("[name=city]").readOnly).toBe(false)
+    expect(document.activeElement).toBe($("[name=city]"))
+    expect($<HTMLInputElement>("[name=name]").value).toBe("Ada")
+    expect($<HTMLInputElement>("[name=city]").value).toBe("London")
+  })
+
+  test("a repeater row's Change gives the indexed name", async () => {
+    const onEdit = vi.fn()
+    const screen = await render(
+      <Dilekce mode="filled" onEdit={onEdit}>
+        <DilekceRepeat name="p" defaultCount={2}>
+          {(row) => (
+            <DilekceField name={row.name("n")} label={`Name ${row.index + 1}`}>
+              <DilekceInput defaultValue="x" />
+            </DilekceField>
+          )}
+        </DilekceRepeat>
+      </Dilekce>,
+    )
+    await screen.getByRole("button", { name: "Change Name 2" }).click()
+    expect(onEdit.mock.calls[0]![0].name).toBe("p.1.n")
+  })
+
+  test("Change is a Turkish word in Turkish", async () => {
+    const screen = await render(<Answers onEdit={() => {}} messages={dilekceMessages.tr} />)
+    await expect.element(screen.getByRole("button", { name: "Değiştir Name" })).toBeVisible()
+  })
+
+  for (const density of ["compact", "comfortable", "roomy"] as const) {
+    test(`${density}: Change is 24px and clear of the control`, async () => {
+      await render(<Answers onEdit={() => {}} density={density} />)
+      for (const change of changes()) {
+        const box = change.getBoundingClientRect()
+        expect(box.width).toBeGreaterThanOrEqual(24)
+        expect(box.height).toBeGreaterThanOrEqual(24)
+        expect(box.bottom).toBeLessThanOrEqual(
+          change.closest(FIELD)!.querySelector("input, select")!.getBoundingClientRect().top,
+        )
+      }
+    })
+  }
+
+  test("Change and Copy sit side by side in tab order: copy, change, then the value", async () => {
+    await render(<Answers onEdit={() => {}} />)
+    await userEvent.tab()
+    expect((document.activeElement as HTMLElement).dataset.slot).toBe("dilekce-copy")
+    await userEvent.tab()
+    expect((document.activeElement as HTMLElement).dataset.slot).toBe("dilekce-change")
+    const copy = $("[data-slot=dilekce-copy]").getBoundingClientRect()
+    const change = $("[data-slot=dilekce-change]").getBoundingClientRect()
+    expect(change.left).toBeGreaterThanOrEqual(copy.right)
+  })
+
+  for (const theme of ["light", "dark"] as const) {
+    test(`${theme}: Change keeps 4.5:1 and a 3:1 focus outline; a link does too`, async () => {
+      document.documentElement.classList.toggle("dark", theme === "dark")
+      await render(
+        <Dilekce mode="filled" onEdit={() => {}}>
+          <DilekceField name="a" label="A">
+            <DilekceInput defaultValue="x" />
+          </DilekceField>
+          <DilekceField name="b" label="B" edit="#b">
+            <DilekceInput defaultValue="y" />
+          </DilekceField>
+        </Dilekce>,
+      )
+      for (const change of changes()) {
+        const field = change.closest<HTMLElement>(FIELD)!
+        const background = style(field).backgroundColor
+        expect(ratio(style(change).color, background), `${theme} text`).toBeGreaterThanOrEqual(4.5)
+        ;(change as HTMLElement).focus()
+        await userEvent.tab({ shift: true })
+        await userEvent.tab()
+        // Shift-tab from the first copy button leaves the page; tab back lands on a Change.
+        if (document.activeElement !== change) (change as HTMLElement).focus()
+        expect(style(change).outlineStyle).toBe("solid")
+        expect(
+          ratio(style(change).outlineColor, background),
+          `${theme} focus`,
+        ).toBeGreaterThanOrEqual(3)
+      }
+    })
+  }
+
+  test("forced colors: Change keeps a visible outline when focused", async () => {
+    await emulate([{ name: "forced-colors", value: "active" }])
+    await render(<Answers onEdit={() => {}} />)
+    const change = changes()[0] as HTMLElement
+    await userEvent.tab()
+    await userEvent.tab()
+    expect(document.activeElement).toBe(change)
+    expect(style(change).outlineStyle).toBe("solid")
+    expect(style(change).outlineColor).not.toBe(style(change.closest(FIELD)!).backgroundColor)
+  })
+
+  test("print hides Change", async () => {
+    await render(<Answers onEdit={() => {}} />)
+    expect(style(changes()[0]!).display).not.toBe("none")
+    await cdp().send("Emulation.setEmulatedMedia", { media: "print" })
+    try {
+      expect(style($("[data-slot=dilekce-field-actions]")).display).toBe("none")
+    } finally {
+      await cdp().send("Emulation.setEmulatedMedia", { media: "" })
+    }
+  })
+
+  describe("emptyText", () => {
+    const empties = () =>
+      [...document.querySelectorAll<HTMLElement>("[data-slot=dilekce-empty]")].filter(
+        (el) => style(el).display !== "none",
+      )
+
+    test("shows where the dash was, for empty fields only, and the dash is gone", async () => {
+      await render(
+        <Dilekce mode="filled" emptyText="Not provided">
+          <DilekceRow>
+            <DilekceField name="a" label="A">
+              <DilekceInput />
+            </DilekceField>
+            <DilekceField name="b" label="B">
+              <DilekceInput defaultValue="Here" />
+            </DilekceField>
+            <DilekceField name="c" label="C">
+              <DilekceSelect options={[{ value: "x", label: "X" }]} />
+            </DilekceField>
+            <DilekceField name="d" label="D">
+              <DilekceInput type="date" />
+            </DilekceField>
+            <DilekceField name="e" label="E">
+              <DilekceTextarea />
+            </DilekceField>
+            <DilekceField name="f" label="F">
+              <DilekceFile />
+            </DilekceField>
+          </DilekceRow>
+        </Dilekce>,
+      )
+      expect(empties().map((el) => el.closest(FIELD)!.querySelector("label")!.textContent)).toEqual(
+        ["A", "C", "D", "E", "F"],
+      )
+      for (const el of empties()) expect(el.textContent).toBe("Not provided")
+      for (const name of ["a", "b", "c"]) {
+        expect(style(fieldOf(name), "::after").content).not.toContain("—")
+      }
+      // Where nothing is empty text is not rendered into the layout.
+      expect(style(fieldOf("b").querySelector("[data-slot=dilekce-empty]")!).display).toBe("none")
+    })
+
+    test("a screen reader meets it: the accessibility tree has the text only for empty fields", async () => {
+      const screen = await render(
+        <Dilekce mode="filled" emptyText="Not provided" aria-label="Answers" copyable={false}>
+          <DilekceField name="a" label="Email">
+            <DilekceSelect options={[{ value: "x", label: "X" }]} />
+          </DilekceField>
+          <DilekceField name="b" label="City">
+            <DilekceSelect defaultValue="x" options={[{ value: "x", label: "X" }]} />
+          </DilekceField>
+        </Dilekce>,
+      )
+      await expect.element(screen.getByRole("form", { name: "Answers" }))
+        .toMatchAriaInlineSnapshot(`
+        - form "Answers":
+          - text: Email
+          - combobox "Email":
+            - option "Select…" [selected]
+            - option "X"
+          - text: Not provided City
+          - combobox "City":
+            - option "Select…"
+            - option "X" [selected]
+      `)
+      // Hidden where a value stands: said once, for Email only.
+      expect(document.body.innerText.match(/Not provided/g)).toHaveLength(1)
+    })
+
+    test("the text follows the value as it is typed, and stays out of edit mode", async () => {
+      function Live({ mode }: { mode: DilekceMode }) {
+        return (
+          <Dilekce mode={mode} emptyText="Not provided">
+            <DilekceField name="a" label="A">
+              <DilekceInput />
+            </DilekceField>
+          </Dilekce>
+        )
+      }
+      const screen = await render(<Live mode="edit" />)
+      expect(document.querySelector("[data-slot=dilekce-empty]")).toBeNull()
+      await userEvent.fill($("[name=a]"), "filled in")
+      await screen.rerender(<Live mode="filled" />)
+      expect(empties()).toHaveLength(0)
+      await screen.rerender(<Live mode="edit" />)
+      await userEvent.clear($("[name=a]"))
+      await screen.rerender(<Live mode="filled" />)
+      expect(empties()).toHaveLength(1)
+    })
+
+    test("without emptyText the dash stays", async () => {
+      await render(
+        <Dilekce mode="filled">
+          <DilekceField name="a" label="A">
+            <DilekceInput />
+          </DilekceField>
+        </Dilekce>,
+      )
+      expect(document.querySelector("[data-slot=dilekce-empty]")).toBeNull()
+      expect(style(fieldOf("a"), "::after").content).toContain("—")
+    })
+
+    for (const theme of ["light", "dark"] as const) {
+      test(`${theme}: the empty text keeps 4.5:1`, async () => {
+        document.documentElement.classList.toggle("dark", theme === "dark")
+        await render(
+          <Dilekce mode="filled" emptyText="Not provided">
+            <DilekceField name="a" label="A">
+              <DilekceInput />
+            </DilekceField>
+          </Dilekce>,
+        )
+        const text = empties()[0]!
+        expect(
+          ratio(style(text).color, style(fieldOf("a")).backgroundColor),
+        ).toBeGreaterThanOrEqual(4.5)
+      })
+    }
+
+    test("it is part of copy-free text: Copy stays hidden for an empty field", async () => {
+      await render(
+        <Dilekce mode="filled" emptyText="Not provided">
+          <DilekceField name="a" label="A">
+            <DilekceInput />
+          </DilekceField>
+        </Dilekce>,
+      )
+      expect(style($("[data-slot=dilekce-copy]")).display).toBe("none")
+    })
   })
 })

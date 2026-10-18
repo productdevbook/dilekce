@@ -30,11 +30,11 @@ components.json             # shadcn config for the demo project
 One file, copied into the user's project by `npx shadcn add`. Exports:
 `Dilekce`, `DilekceSection`, `DilekceRow`, `DilekceField`, `DilekceInput`,
 `DilekceTextarea`, `DilekceSelect`, `DilekceNumber`, `DilekceRadioGroup`,
-`DilekceCheckboxGroup`, `DilekceCheckbox`, `DilekceSwitch`, `DilekceFile`, `DilekceActions`, `DilekceSummary`, `dilekceMessages`
+`DilekceCheckboxGroup`, `DilekceCheckbox`, `DilekceSwitch`, `DilekceFile`, `DilekceActions`, `DilekceSummary`, `DilekceRepeat`, `DilekceRepeatRemove`, `dilekceMessages`
 (`en`, `tr`), and the types `DilekceMode`, `DilekceDensity`, `DilekceMessages`,
 `DilekceErrors`, `DilekceOption`, `DilekceValidityKey`, `DilekceMessageKey`,
 `DilekceValidator`, `DilekceInvalidField`, `DilekceValues`, `DilekceOutput`,
-`DilekceDefaultValues`, `DilekceDefaultValue`, `StandardSchemaV1` (copied from
+`DilekceDefaultValues`, `DilekceDefaultValue`, `DilekceEditField`, `DilekceRepeatRow`, `DilekceRepeatProps`, `StandardSchemaV1` (copied from
 the spec, no dependency).
 
 - `Dilekce<S>`: `mode`, `density`, `focus`, `messages`, `errors`, `advance`,
@@ -116,8 +116,34 @@ the spec, no dependency).
     control. A field's latest props live in an insertion effect, so a
     control's layout-effect `sync()` sees this render's `validate`.
   - `step="any"` steppers move by 1, keeping the value's decimals.
+- `DilekceRepeat` (#19): `keys` state (a counter, never an index) drives
+  `div[data-slot=dilekce-repeat-row].contents` wrappers; `row.name(f)` is
+  `name.<index>.<f>`, so a removed earlier row renames later rows' controls
+  in place (DOM values stay; defaults aren't re-applied on rename). Start
+  count: `defaultCount` ?? rows in `defaultValues` (`countRows` over the
+  flattened map; `defaultRows` in the form context) ?? `max(min, 1)`, clamped.
+  A native `reset` listener on the form puts the default rows back, but
+  only remounts when the keys differ from the pristine ones. `measure()` runs
+  in a layout effect on every key change (dirty counts rows); the add/remove
+  action ref drives focus + `announce`. Add cell is not rendered at `max`;
+  `DilekceRepeatRemove` reads `RepeatRowContext`, disabled at `min`, grows to
+  full width under 30rem. Both hidden in filled mode and print.
+- Check your answers (#20): `Dilekce` `onEdit` (context `canEdit`/`edit`) and
+  `DilekceField` `edit` (string = `<a href>`, function = button, `false` =
+  none) render `[data-slot=dilekce-change]` in the field's actions span
+  (`dilekce-field-actions`, with Copy; copy first). Change is always visible
+  (Copy is hover/focus/coarse only); named by `aria-labelledby` "Change <label>".
+  `emptyText` is a real `span[data-slot=dilekce-empty]` shown by the same
+  `:placeholder-shown`/`data-empty` conditions as the dash, which it
+  suppresses (`after:content-none!`); `display:none` elsewhere, so it is
+  only in the a11y tree when empty (tested with `toMatchAriaInlineSnapshot`,
+  which matches by containment). It does not cover unchecked groups/toggles
+  (they never had a dash).
+- In tests, never call `cleanup()` mid-test (it breaks later renders in the
+  file); use `await screen.unmount()`.
 - Message keys beyond validity: `pending`, `invalidOne`, `invalidMany`
-  (`{count}`), `copy`, `copied`, `summaryTitle`.
+  (`{count}`), `copy`, `copied`, `summaryTitle`, `add`, `remove`, `removeRow`,
+  `rowAdded`, `rowRemoved` (`{index}`, 1-based), `change`.
 
 ## Build & Scripts
 
@@ -189,7 +215,7 @@ bun run build            # registry + static demo
 
 ## Project Status
 
-v0.1. The full gate (`bun run test`) is green: 202 tests, zero lint warnings,
+v0.1. The full gate (`bun run test`) is green: 243 tests, zero lint warnings,
 zero typecheck errors (default and strict). Correctness audit items fixed:
 double submit, action errors surviving reset, ref merging, value from
 controls, disabled, programmatic writes, `step="any"`, strict TS. Review round 1
@@ -205,7 +231,7 @@ tests in the "accessibility" blocks at the end of `test/dilekce.test.tsx`
 (forced colors and reduced motion are emulated through `cdp()`). Left open:
 `errors` still block a resubmit until the field is edited (a product decision,
 covered by a test); ROADMAP #16 (error summary), #17 (Standard Schema) and #18
-(`defaultValues`) and #21 (checkbox, switch, file, date types) are built; P1 #19, #20, #22 (features) are open, the a11y P3 items F4, F10, F12
+(`defaultValues`), #19 (`DilekceRepeat`), #20 (`onEdit`/`edit`/`emptyText`) and #21 (checkbox, switch, file, date types) are built; P1 #22 (integration recipes) is open, the a11y P3 items F4, F10, F12
 (`lang` is the app's job) and F13 (demo). Not yet published: the install URL
 points at `public/r/dilekce.json` on the `main` branch of
 `github.com/productdevbook/dilekce`, which doesn't exist yet.

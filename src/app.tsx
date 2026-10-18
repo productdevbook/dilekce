@@ -1,4 +1,5 @@
 import * as React from "react"
+import { flushSync } from "react-dom"
 import { cn } from "cn"
 import { z } from "zod"
 
@@ -13,6 +14,8 @@ import {
   DilekceInput,
   DilekceNumber,
   DilekceRadioGroup,
+  DilekceRepeat,
+  DilekceRepeatRemove,
   DilekceRow,
   DilekceSection,
   DilekceSelect,
@@ -40,7 +43,8 @@ const copy = {
     city: "City",
     postcode: "Postcode",
     weight: "Weight",
-    pieces: "Pieces",
+    emptyText: "Not provided",
+    addParcel: "Add parcel",
     contents: "Contents",
     service: "Service",
     extras: "Extras",
@@ -76,7 +80,8 @@ const copy = {
     city: "Şehir",
     postcode: "Posta kodu",
     weight: "Ağırlık",
-    pieces: "Parça",
+    emptyText: "Belirtilmedi",
+    addParcel: "Paket ekle",
     contents: "İçerik",
     service: "Hizmet",
     extras: "Ekstralar",
@@ -128,27 +133,28 @@ export function App() {
       z
         .looseObject({
           street: z.string().regex(/\d/, t.houseNumber),
-          pieces: z.coerce.number(),
-          weight: z.coerce.number(),
+          // The repeater's rows nest: parcels.0.weight, parcels.1.weight, …
+          parcels: z.array(z.object({ weight: z.coerce.number(), contents: z.string() })),
           value: z.union([z.literal("").transform(() => undefined), z.coerce.number()]),
           service: z.string(),
-          contents: z.string(),
           // A single checkbox is "on" when ticked and absent when not.
           consent: z.literal("on"),
           // A file field gives a File (File[] with `multiple`), absent when none was chosen.
           invoice: z.instanceof(File).optional(),
         })
         // No path: the issue belongs to the form, so only the summary shows it.
-        .refine((v) => !(v.service === "same-day" && v.contents === "food"), {
-          message: t.noFood,
-        }),
+        .refine(
+          (v) => !(v.service === "same-day" && v.parcels.some((p) => p.contents === "food")),
+          {
+            message: t.noFood,
+          },
+        ),
     [t],
   )
   // The example fills the form by name; a reset goes back to these.
   const defaults = React.useMemo(
     () => ({
-      weight: 1.5,
-      pieces: 1,
+      parcels: [{ weight: 1.5 }],
       service: "standard",
       sms: true,
       ...(sample
@@ -158,7 +164,10 @@ export function App() {
             confirm: "ada@analytical.engine",
             city: "London",
             value: 250,
-            contents: "documents",
+            parcels: [
+              { weight: 1.5, contents: "documents" },
+              { weight: 4, contents: "clothing" },
+            ],
             extras: ["signature"],
             pickup: today(),
           }
@@ -232,6 +241,12 @@ export function App() {
             messages={dilekceMessages[lang]}
             errors={errors}
             advance={advance}
+            // Check your answers: Change in filled mode goes back to the field.
+            onEdit={({ element }) => {
+              flushSync(() => setMode("edit"))
+              element.focus()
+            }}
+            emptyText={t.emptyText}
             warnUnsaved
             onDirtyChange={setDirty}
             schema={booking}
@@ -295,32 +310,38 @@ export function App() {
             </DilekceSection>
 
             <DilekceSection legend={t.parcel}>
+              <DilekceRepeat name="parcels" min={1} max={5} addLabel={t.addParcel}>
+                {(row) => (
+                  <DilekceRow>
+                    <DilekceField name={row.name("weight")} label={`${t.weight} ${row.index + 1}`}>
+                      <DilekceNumber min={0.1} max={30} step={0.1} required trailing="kg" />
+                    </DilekceField>
+                    <DilekceField
+                      name={row.name("contents")}
+                      label={`${t.contents} ${row.index + 1}`}
+                      span={2}
+                    >
+                      <DilekceSelect
+                        required
+                        placeholder={t.select}
+                        options={[
+                          { value: "documents", label: "Documents" },
+                          { value: "clothing", label: "Clothing" },
+                          { value: "electronics", label: "Electronics" },
+                          { value: "food", label: "Food (non-perishable)" },
+                          { value: "other", label: "Other" },
+                        ]}
+                      />
+                    </DilekceField>
+                    <DilekceRepeatRemove />
+                  </DilekceRow>
+                )}
+              </DilekceRepeat>
               <DilekceRow>
-                <DilekceField name="weight" label={t.weight}>
-                  <DilekceNumber min={0.1} max={30} step={0.1} required trailing="kg" />
-                </DilekceField>
-                <DilekceField name="pieces" label={t.pieces}>
-                  <DilekceNumber min={1} max={20} />
-                </DilekceField>
                 <DilekceField name="value" label={t.value}>
                   <DilekceNumber min={0} step={10} leading="$" />
                 </DilekceField>
-                <DilekceField name="contents" label={t.contents} span={2}>
-                  <DilekceSelect
-                    required
-                    placeholder={t.select}
-                    options={[
-                      { value: "documents", label: "Documents" },
-                      { value: "clothing", label: "Clothing" },
-                      { value: "electronics", label: "Electronics" },
-                      { value: "food", label: "Food (non-perishable)" },
-                      { value: "other", label: "Other" },
-                    ]}
-                  />
-                </DilekceField>
-              </DilekceRow>
-              <DilekceRow>
-                <DilekceField name="invoice" label={t.invoice} span={4} description={t.invoiceHint}>
+                <DilekceField name="invoice" label={t.invoice} span={3} description={t.invoiceHint}>
                   <DilekceFile accept="application/pdf,image/*" />
                 </DilekceField>
               </DilekceRow>
@@ -379,8 +400,9 @@ export function App() {
           Try postcode <code className="font-mono text-foreground">00000</code> for an async check,
           an email ending in <code className="font-mono text-foreground">@bounce.test</code> for a
           server error, same-day delivery of food for a form-level issue from the schema, Enter to
-          move cell to cell, filled mode to copy values, a drag across the weight label to scrub it,
-          or a narrower width to watch rows wrap without a single breakpoint.
+          move cell to cell, "Add parcel" for a repeating row, filled mode to copy values or Change
+          a field, a drag across the weight label to scrub it, or a narrower width to watch rows
+          wrap without a single breakpoint.
         </p>
 
         {submitted && (

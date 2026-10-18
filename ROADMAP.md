@@ -42,8 +42,8 @@ competing libraries have. The full reports, with evidence and reproductions, are
 | 16  | **Error summary** (GOV.UK style): a list of links to the failing fields at the top, on a stopped submit. Pass `{ name, label, message }[]` to `onInvalidSubmit`. | M      | features 2.1           |
 | 17  | **`schema` prop for Standard Schema** (Zod, Valibot, ArkType) — no dependency, the spec is an interface.                                                         | M      | features 2.8           |
 | 18  | **`defaultValues` / `values` by name**, restored by reset: drafts, react-hook-form and Conform.                                                                  | M      | features 2.5           |
-| 19  | **Repeaters** ("add another": passengers, invoice lines) as `DilekceRepeat` or a documented recipe.                                                              | M      | features 2.2           |
-| 20  | **Check-your-answers** from filled mode: a "Change" link per field, configurable empty text. The differentiator.                                                 | M      | features 2.7           |
+| 19  | ~~**Repeaters** ("add another": passengers, invoice lines) as `DilekceRepeat` or a documented recipe.~~ Done.                                                    | M      | features 2.2           |
+| 20  | ~~**Check-your-answers** from filled mode: a "Change" link per field, configurable empty text. The differentiator.~~ Done.                                       | M      | features 2.7           |
 | 21  | **Missing controls, native**: single consent checkbox, switch (`role="switch"`), file input, tested date/time inputs with locale display in filled mode.         | M      | features 1.1, 1.2, 1.8 |
 | 22  | **Integration recipes with tests**: react-hook-form (incl. `Controller` for groups), TanStack Form, Conform, server actions.                                     | M      | features 3             |
 
