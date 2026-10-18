@@ -6,7 +6,7 @@
     {
       "name": "dilekce",
       "type": "registry:ui",
-      "title": "Dilekçe",
+      "title": "Dilekce",
       "author": "productdevbook <https://github.com/productdevbook>",
       "description": "Dense, paper-style grid forms: every field is a cell, errors sit inside it, and the same form renders filled in like a completed document.",
       "dependencies": ["cn"],
@@ -17,7 +17,7 @@
         }
       ],
       "categories": ["forms", "layout"],
-      "docs": "Dilekçe is a single file with no stylesheet: it uses shadcn tokens only and imports `cn` from the `cn` package. Needs React 19. Import it from `@/components/ui/dilekce` and compose cells inside the form; pair it with your own `<Button>` for submit (`npx shadcn add button`). Docs: https://github.com/productdevbook/dilekce",
+      "docs": "Dilekce is a single file with no stylesheet: it uses shadcn tokens only and imports `cn` from the `cn` package. Needs React 19. Import it from `@/components/ui/dilekce` and compose cells inside the form; pair it with your own `<Button>` for submit (`npx shadcn add button`). Docs: https://github.com/productdevbook/dilekce",
       "meta": {
         "react": "19",
         "tailwind": "4"

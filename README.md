@@ -1,6 +1,6 @@
 <p align="center">
   <br>
-  <b style="font-size: 2em;">dilekçe</b>
+  <b style="font-size: 2em;">dilekce</b>
   <br><br>
   Dense, paper-style grid forms for shadcn/ui.
   <br>
@@ -12,13 +12,13 @@
 </p>
 
 > [!IMPORTANT]
-> **dilekçe is a shadcn/ui registry item, not an npm package.** The CLI copies one
+> **dilekce is a shadcn/ui registry item, not an npm package.** The CLI copies one
 > file into your project and it's yours from then on. It uses your theme's
 > tokens (`--background`, `--border`, `--primary`, `--destructive`, `--radius`),
 > follows your `.dark` class, and needs nothing beyond React, Tailwind CSS v4
 > and [`cn`](https://github.com/shadcn-ui/cn).
 
-> _Dilekçe_ is Turkish for petition: the form you fill out at a government
+> _Dilekce_ is Turkish for petition: the form you fill out at a government
 > counter, every box ruled, every answer in pen.
 
 ## Install
@@ -125,7 +125,7 @@ its own short message and focus goes to the first one that needs attention.
 ## Validation
 
 Constraint validation, the browser's own: `required`, `type="email"`,
-`pattern`, `min`, `max`, `minLength` and friends. dilekçe decides _when_ to
+`pattern`, `min`, `max`, `minLength` and friends. dilekce decides _when_ to
 show a message:
 
 - On submit, every invalid field at once.
@@ -239,7 +239,7 @@ the parts through `data-slot` (`dilekce-summary`, `dilekce-summary-title`,
 
 ### Schema (Zod, Valibot, ArkType)
 
-`schema` takes any [Standard Schema](https://standardschema.dev). dilekçe
+`schema` takes any [Standard Schema](https://standardschema.dev). dilekce
 declares the interface itself, so there is no dependency on any of them. The
 schema runs once the browser's constraints and the field's own `validate`
 pass: on submit for every field, on blur and live for the field being edited
@@ -344,7 +344,7 @@ Give the field its message with `error`. While it's set the field is invalid,
 </DilekceField>
 ```
 
-`register`'s `ref` and a ref of your own are merged with the ones dilekçe keeps
+`register`'s `ref` and a ref of your own are merged with the ones dilekce keeps
 (on the form, a field, a number and a select), so steppers, scrubbing, dirty
 and the empty state keep working. Values written from code, such as
 `setValue`, are picked up on the next focus change, reset or submit; a
@@ -569,11 +569,11 @@ straight from there, so edits hot-reload.
 
 ## Inspiration
 
-dilekçe is its own take on an idea with a long history: forms laid out like
+dilekce is its own take on an idea with a long history: forms laid out like
 paper, every field a ruled box. It was inspired by FormKeep's
 [Gridforms](https://formkeep.com/gridforms) and by Matt Rothenberg's
 [Formulaire](https://github.com/mattrothenberg/formulaire), which brought that
-idea to React on Base UI. dilekçe goes a different way: shadcn/ui only, native
+idea to React on Base UI. dilekce goes a different way: shadcn/ui only, native
 controls instead of a headless library, Tailwind classes instead of a
 stylesheet, and distributed as a registry item you own. It was written from
 scratch rather than ported.

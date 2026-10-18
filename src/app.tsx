@@ -203,7 +203,7 @@ export function App() {
       <header className="flex flex-col gap-4">
         <div className="flex items-start justify-between gap-4">
           <div className="flex flex-col gap-2">
-            <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">dilekçe</h1>
+            <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">dilekce</h1>
             <p className="max-w-xl text-pretty text-muted-foreground">
               Dense, paper-style grid forms for shadcn/ui. Every field is a cell, errors sit inside
               it, and the same form renders filled in like a completed document. Native controls,
