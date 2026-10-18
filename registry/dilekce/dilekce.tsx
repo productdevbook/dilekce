@@ -108,6 +108,8 @@ interface FormContextValue {
   errors: DilekceErrors
   clearError: (name: string) => void
   register: (handle: FieldHandle) => () => void
+  /** Re-reads whether the form differs from where it started. */
+  measure: () => void
   copyable: boolean
 }
 
@@ -121,6 +123,8 @@ interface FieldContextValue {
   labelRef: React.RefObject<HTMLElement | null>
   /** Groups (radios, checkboxes) can't be a <label>'s target. */
   setGroup: (group: boolean) => void
+  /** A control's value changed without an event: re-read what hangs off it. */
+  sync: () => void
 }
 
 const NO_ERRORS: DilekceErrors = {}
@@ -421,17 +425,11 @@ function Dilekce({
     return () => void fields.current.delete(handle)
   }, [])
 
-  const merged = React.useMemo(() => ({ ...dilekceMessages.en, ...messages }), [messages])
-  const context = React.useMemo<FormContextValue>(
-    () => ({ mode, messages: merged, errors, clearError, register, copyable }),
-    [mode, merged, errors, clearError, register, copyable],
-  )
-
   /*
    * Dirty: the values differ from a snapshot taken at mount, after a reset
    * and after each submit that went through.
    */
-  const clean = React.useRef("")
+  const clean = React.useRef<string | null>(null)
   const [dirty, setDirty] = React.useState(false)
   const dirtyRef = React.useRef(false)
   const dirtyChange = React.useRef(onDirtyChange)
@@ -447,7 +445,10 @@ function Dilekce({
     dirtyChange.current?.(next)
   }, [])
   const measure = React.useCallback(() => {
-    if (formRef.current) markDirty(snapshot(formRef.current) !== clean.current)
+    // Not before the form has taken its first snapshot, at mount.
+    if (formRef.current && clean.current != null) {
+      markDirty(snapshot(formRef.current) !== clean.current)
+    }
   }, [markDirty])
   const settle = React.useCallback(() => {
     if (formRef.current) clean.current = snapshot(formRef.current)
@@ -455,15 +456,40 @@ function Dilekce({
   }, [markDirty])
   React.useLayoutEffect(settle, [settle])
 
+  const merged = React.useMemo(() => ({ ...dilekceMessages.en, ...messages }), [messages])
+  const context = React.useMemo<FormContextValue>(
+    () => ({ mode, messages: merged, errors, clearError, register, measure, copyable }),
+    [mode, merged, errors, clearError, register, measure, copyable],
+  )
+
   React.useEffect(() => {
-    if (!warnUnsaved || !dirty) return
+    if (!warnUnsaved) return
     const warn = (event: BeforeUnloadEvent) => {
+      // Values written from code raise no event: look once more, now that it matters.
+      measure()
+      if (!dirtyRef.current) return
       event.preventDefault()
       event.returnValue = ""
     }
     window.addEventListener("beforeunload", warn)
     return () => window.removeEventListener("beforeunload", warn)
-  }, [warnUnsaved, dirty])
+  }, [warnUnsaved, measure])
+
+  /*
+   * Values written from code (`input.value = …`, a form library's setValue)
+   * raise no event, so dirty is also re-read whenever focus moves in or out
+   * of the form: the moment someone is about to see or act on it.
+   */
+  React.useEffect(() => {
+    const form = formRef.current
+    if (!form) return
+    form.addEventListener("focusin", measure)
+    form.addEventListener("focusout", measure)
+    return () => {
+      form.removeEventListener("focusin", measure)
+      form.removeEventListener("focusout", measure)
+    }
+  }, [measure])
 
   // A stopped submit is announced once, politely, for screen reader users who
   // can't see the cells turn red.
@@ -771,9 +797,9 @@ function DilekceField({
   )
 
   // Latest values for the handle and checks, which run outside a render.
-  const latest = React.useRef({ external, all, validate })
+  const latest = React.useRef({ external, all, validate, native })
   React.useLayoutEffect(() => {
-    latest.current = { external, all, validate }
+    latest.current = { external, all, validate, native }
   })
   React.useLayoutEffect(() => {
     setControlName(controlOf(fieldRef.current)?.name || undefined)
@@ -784,11 +810,14 @@ function DilekceField({
    * shows `pending` and only the newest run may set the message.
    */
   const run = React.useRef(0)
+  // The value the message on show was last worked out for.
+  const checked = React.useRef("")
   const check = React.useCallback((): string | null | Promise<string | null> => {
     const field = fieldRef.current
     if (!field) return null
     const { all, validate } = latest.current
     const token = ++run.current
+    checked.current = JSON.stringify(valueOf(field))
     if (allDisabled(field)) {
       setPending(false)
       setNative(null)
@@ -832,9 +861,24 @@ function DilekceField({
   const readCount = React.useCallback(() => {
     const control = controlOf(fieldRef.current)
     const max = control?.maxLength ?? -1
-    setCount(control && max > 0 ? { length: control.value.length, max } : null)
+    const next = control && max > 0 ? { length: control.value.length, max } : null
+    setCount((last) => (last?.length === next?.length && last?.max === next?.max ? last : next))
   }, [])
   React.useLayoutEffect(readCount, [readCount])
+
+  /*
+   * A control's value changed without an event of its own (a controlled value
+   * set from code): the counter, the form's dirty state and a message on show
+   * follow it.
+   */
+  const measure = form?.measure
+  const sync = React.useCallback(() => {
+    const field = fieldRef.current
+    if (!field) return
+    readCount()
+    measure?.()
+    if (latest.current.native && JSON.stringify(valueOf(field)) !== checked.current) void check()
+  }, [check, readCount, measure])
 
   React.useEffect(() => {
     if (!form) return
@@ -901,8 +945,9 @@ function DilekceField({
       readOnly,
       labelRef,
       setGroup,
+      sync,
     }),
-    [id, labelId, name, invalid, describedBy, readOnly],
+    [id, labelId, name, invalid, describedBy, readOnly, sync],
   )
 
   const labelClass = cn(
@@ -1108,8 +1153,15 @@ function useControl(props: {
   name?: string
   readOnly?: boolean
   "aria-describedby"?: string
+  /** A controlled value; when it changes the field re-reads what depends on it. */
+  value?: unknown
 }) {
   const field = useField()
+  const sync = field?.sync
+  const changed = Array.isArray(props.value)
+    ? props.value.join("\u0000")
+    : String(props.value ?? "")
+  React.useLayoutEffect(() => sync?.(), [sync, changed])
   return {
     id: props.id ?? field?.id,
     name: props.name ?? field?.name,
@@ -1220,19 +1272,48 @@ function DilekceSelect({
   ...props
 }: DilekceSelectProps) {
   // <select> has no readOnly: filled mode guards it by hand instead.
-  const { readOnly, ...selectControl } = useControl(props)
+  const { readOnly, ...selectControl } = useControl({ ...props, value })
   const [current, setCurrent] = React.useState(String(defaultValue ?? ""))
   const empty = (value === undefined ? current : String(value)) === ""
   const selectRef = React.useRef<HTMLSelectElement>(null)
   const mergedRef = useMergedRef(selectRef, ref)
 
-  // A form reset restores the selection without a change event.
+  /*
+   * Uncontrolled, `empty` is read back from the element whenever it can have
+   * changed without a change event: a form reset (the browser restores the
+   * selection after the event), focus coming or going, and code assigning
+   * `select.value` or `select.selectedIndex`, which is caught by wrapping both
+   * setters on this element. Not seen: `option.selected = true`, which can't
+   * be observed without polling. Controlled, `empty` comes from the prop.
+   */
   React.useEffect(() => {
-    const form = selectRef.current?.form
-    if (!form) return
-    const onReset = () => setTimeout(() => setCurrent(selectRef.current?.value ?? ""))
-    form.addEventListener("reset", onReset)
-    return () => form.removeEventListener("reset", onReset)
+    const select = selectRef.current
+    if (!select) return
+    const read = () => setCurrent(select.value)
+    const onReset = () => setTimeout(read)
+    const wrapped = (["value", "selectedIndex"] as const).flatMap((key) => {
+      const original = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, key)
+      if (!original?.get || !original.set) return []
+      const { get, set } = original
+      Object.defineProperty(select, key, {
+        configurable: true,
+        get: () => get.call(select),
+        set: (next: never) => {
+          set.call(select, next)
+          read()
+        },
+      })
+      return [key]
+    })
+    select.form?.addEventListener("reset", onReset)
+    select.addEventListener("focus", read)
+    select.addEventListener("blur", read)
+    return () => {
+      for (const key of wrapped) delete select[key]
+      select.form?.removeEventListener("reset", onReset)
+      select.removeEventListener("focus", read)
+      select.removeEventListener("blur", read)
+    }
   }, [])
 
   return (
@@ -1550,7 +1631,7 @@ function DilekceRadioGroup({
 }: GroupProps<string>) {
   const field = useField()
   useGroupLabel()
-  const control = useControl({ name })
+  const control = useControl({ name, value })
   const guard = useReadOnlyGuard(Boolean(control.readOnly))
   const fallback = React.useId()
 
@@ -1603,7 +1684,7 @@ function DilekceCheckboxGroup({
 }: GroupProps<string[]>) {
   const field = useField()
   useGroupLabel()
-  const control = useControl({ name })
+  const control = useControl({ name, value })
   const guard = useReadOnlyGuard(Boolean(control.readOnly))
 
   return (

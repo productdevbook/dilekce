@@ -1,4 +1,5 @@
 import * as React from "react"
+import { flushSync } from "react-dom"
 import { afterEach, describe, expect, test, vi } from "vitest"
 import { userEvent } from "vitest/browser"
 import { cleanup, render } from "vitest-browser-react"
@@ -1210,6 +1211,152 @@ describe("refs", () => {
     await screen.unmount()
     expect(object.current).toBeNull()
     expect(ref).toHaveBeenLastCalledWith(null)
+  })
+})
+
+describe("values written from code", () => {
+  const sizes = [
+    { value: "a", label: "A" },
+    { value: "b", label: "B" },
+  ]
+  const dash = (name: string) =>
+    getComputedStyle($(`[name=${name}]`).closest("[data-slot=dilekce-field]")!, "::after").content
+
+  test("a select follows select.value, selectedIndex and a form reset", async () => {
+    await render(
+      <Dilekce mode="filled">
+        <DilekceField name="size" label="Size">
+          <DilekceSelect options={sizes} />
+        </DilekceField>
+      </Dilekce>,
+    )
+    const select = $<HTMLSelectElement>("select")
+    expect(select.hasAttribute("data-empty")).toBe(true)
+    expect(dash("size")).toContain("—")
+
+    select.value = "a"
+    await expect.poll(() => select.hasAttribute("data-empty")).toBe(false)
+    expect(dash("size")).not.toContain("—")
+    expect(select.value).toBe("a")
+
+    $<HTMLFormElement>("form").reset()
+    await expect.poll(() => select.hasAttribute("data-empty")).toBe(true)
+
+    select.selectedIndex = 2
+    await expect.poll(() => select.hasAttribute("data-empty")).toBe(false)
+    expect(select.value).toBe("b")
+  })
+
+  test("a controlled select follows its value prop", async () => {
+    let set!: (value: string) => void
+    function Controlled() {
+      const [value, setValue] = React.useState("")
+      React.useEffect(() => {
+        set = setValue
+      }, [setValue])
+      return (
+        <Dilekce>
+          <DilekceField name="size" label="Size">
+            <DilekceSelect options={sizes} value={value} onChange={() => {}} />
+          </DilekceField>
+        </Dilekce>
+      )
+    }
+    await render(<Controlled />)
+    expect($("select").hasAttribute("data-empty")).toBe(true)
+    flushSync(() => set("b"))
+    expect($("select").hasAttribute("data-empty")).toBe(false)
+    flushSync(() => set(""))
+    expect($("select").hasAttribute("data-empty")).toBe(true)
+  })
+
+  test("a controlled input updates the counter, dirty and a showing message", async () => {
+    let set!: (value: string) => void
+    const onDirtyChange = vi.fn()
+    function Controlled() {
+      const [value, setValue] = React.useState("")
+      React.useEffect(() => {
+        set = setValue
+      }, [setValue])
+      return (
+        <Dilekce onDirtyChange={onDirtyChange}>
+          <DilekceField name="code" label="Code">
+            <DilekceInput
+              required
+              maxLength={10}
+              value={value}
+              onChange={(event) => setValue(event.target.value)}
+            />
+          </DilekceField>
+          <button type="submit">Save</button>
+        </Dilekce>
+      )
+    }
+    const screen = await render(<Controlled />)
+    expect(onDirtyChange).not.toHaveBeenCalled()
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect(errorOf("code")).toBe("Required")
+
+    flushSync(() => set("123456789"))
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true)
+    expect($("form").hasAttribute("data-dirty")).toBe(true)
+    expect(errorOf("code")).toBeNull()
+    // Within 90% of the limit the counter always shows.
+    expect($("[data-slot=dilekce-counter]").textContent).toBe("9/10")
+
+    flushSync(() => set(""))
+    expect(onDirtyChange).toHaveBeenLastCalledWith(false)
+    expect($("form").hasAttribute("data-dirty")).toBe(false)
+  })
+
+  test("a value written to an uncontrolled input is seen when focus moves, and on leaving", async () => {
+    const screen = await render(
+      <Dilekce warnUnsaved>
+        <DilekceField name="a" label="A">
+          <DilekceInput />
+        </DilekceField>
+        <DilekceField name="b" label="B">
+          <DilekceInput />
+        </DilekceField>
+      </Dilekce>,
+    )
+    const leave = () => {
+      const event = new Event("beforeunload", { cancelable: true })
+      window.dispatchEvent(event)
+      return event.defaultPrevented
+    }
+    $<HTMLInputElement>("[name=a]").value = "set from code"
+    // Nothing has happened yet that could tell; leaving the page looks again.
+    expect(leave()).toBe(true)
+    await expect.poll(() => $("form").hasAttribute("data-dirty")).toBe(true)
+
+    $<HTMLFormElement>("form").reset()
+    await expect.poll(() => $("form").hasAttribute("data-dirty")).toBe(false)
+
+    $<HTMLInputElement>("[name=b]").value = "again"
+    await screen.getByRole("textbox", { name: "A" }).click()
+    await expect.poll(() => $("form").hasAttribute("data-dirty")).toBe(true)
+  })
+
+  test("form.reset() from code clears the counter, the select and dirty", async () => {
+    await render(
+      <Dilekce>
+        <DilekceField name="a" label="A">
+          <DilekceInput maxLength={9} defaultValue="12345678" />
+        </DilekceField>
+        <DilekceField name="size" label="Size">
+          <DilekceSelect options={sizes} />
+        </DilekceField>
+      </Dilekce>,
+    )
+    await userEvent.type($("[name=a]"), "9")
+    await userEvent.selectOptions($("select"), "a")
+    expect($("[data-slot=dilekce-counter]").textContent).toBe("9/9")
+    expect($("form").hasAttribute("data-dirty")).toBe(true)
+    $<HTMLFormElement>("form").reset()
+    await expect.poll(() => $("[data-slot=dilekce-counter]").textContent).toBe("8/9")
+    expect($("select").hasAttribute("data-empty")).toBe(true)
+    expect($("form").hasAttribute("data-dirty")).toBe(false)
   })
 })
 
