@@ -569,7 +569,9 @@ describe("custom rules", () => {
       </Dilekce>,
     )
     await screen.getByRole("button", { name: "Save" }).click()
-    expect(validate).toHaveBeenCalledWith("ada", expect.any(FormData))
+    expect(validate).toHaveBeenCalledWith("ada", expect.any(FormData), {
+      signal: expect.any(AbortSignal),
+    })
     expect($("[data-slot=dilekce-pending]").textContent).toBe("Checking…")
     expect($("form").getAttribute("aria-busy")).toBe("true")
     expect(onSubmit).not.toHaveBeenCalled()
@@ -584,9 +586,9 @@ describe("custom rules", () => {
     expect(errorOf("user")).toBeNull()
   })
 
-  test("a second submit while the check runs is ignored, and the replay goes through once", async () => {
-    let finish!: (message: string | null) => void
-    const validate = vi.fn(() => new Promise<string | null>((resolve) => (finish = resolve)))
+  test("a newer submit supersedes the running check, and the replay goes through once", async () => {
+    const finishers: Array<(message: string | null) => void> = []
+    const validate = vi.fn(() => new Promise<string | null>((resolve) => finishers.push(resolve)))
     const action = vi.fn()
     const screen = await render(
       <Dilekce action={action}>
@@ -600,12 +602,17 @@ describe("custom rules", () => {
     await save.click()
     await save.click()
     await save.click()
-    expect(validate).toHaveBeenCalledOnce()
-    finish(null)
+    expect(validate).toHaveBeenCalledTimes(3)
+    // The older runs answer late, and are ignored.
+    finishers[0]!(null)
+    finishers[1]!(null)
+    await sleep(50)
+    expect(action).not.toHaveBeenCalled()
+    finishers[2]!(null)
     await expect.poll(() => action.mock.calls.length).toBe(1)
     await sleep(100)
     expect(action).toHaveBeenCalledOnce()
-    expect(validate).toHaveBeenCalledOnce()
+    expect(validate).toHaveBeenCalledTimes(3)
   })
 
   test("values edited while the check runs are checked again before the submit", async () => {
@@ -650,7 +657,9 @@ describe("custom rules", () => {
       </Dilekce>,
     )
     await screen.getByRole("button", { name: "Save" }).click()
-    expect(validate).toHaveBeenCalledWith(["a", "b"], expect.any(FormData))
+    expect(validate).toHaveBeenCalledWith(["a", "b"], expect.any(FormData), {
+      signal: expect.any(AbortSignal),
+    })
     expect(errorOf("x")).toBe("Pick one at most")
   })
 })
@@ -674,7 +683,7 @@ describe("a name on the control, not the field", () => {
       </Dilekce>,
     )
     await screen.getByRole("button", { name: "Save" }).click()
-    expect(validate).toHaveBeenCalledWith("b", expect.any(FormData))
+    expect(validate).toHaveBeenCalledWith("b", expect.any(FormData), expect.anything())
   })
 
   test("a checkbox group's rule gets only the checked boxes", async () => {
@@ -688,7 +697,7 @@ describe("a name on the control, not the field", () => {
       </Dilekce>,
     )
     await screen.getByRole("button", { name: "Save" }).click()
-    expect(validate).toHaveBeenCalledWith(["b"], expect.any(FormData))
+    expect(validate).toHaveBeenCalledWith(["b"], expect.any(FormData), expect.anything())
   })
 
   test("a field and its control may carry different names", async () => {
@@ -706,7 +715,7 @@ describe("a name on the control, not the field", () => {
     await userEvent.type($("[name=control]"), "!")
     expect(errorOf("control")).toBeNull()
     await screen.getByRole("button", { name: "Save" }).click()
-    expect(validate).toHaveBeenCalledWith("hello!", expect.any(FormData))
+    expect(validate).toHaveBeenCalledWith("hello!", expect.any(FormData), expect.anything())
   })
 })
 
@@ -1901,5 +1910,283 @@ describe("reduced motion", () => {
     await userEvent.tab()
     await expect.poll(() => document.querySelector("[data-slot=dilekce-pending]")).not.toBeNull()
     expect(style($("[data-slot=dilekce-pending]")).animationName).toBe("none")
+  })
+})
+
+describe("async checks that go wrong", () => {
+  const prevent = (event: React.FormEvent) => event.preventDefault()
+
+  test("a rule that never settles doesn't block the next submit", async () => {
+    const onSubmit = vi.fn(prevent)
+    let hang = true
+    const validate = () => (hang ? new Promise<string>(() => {}) : "")
+    await render(
+      <Dilekce onSubmit={onSubmit}>
+        <DilekceField name="a" label="A" validate={validate}>
+          <DilekceInput />
+        </DilekceField>
+        <button type="submit">Go</button>
+      </Dilekce>,
+    )
+    $<HTMLFormElement>("form").requestSubmit()
+    await sleep(30)
+    expect($("form").dataset.checking).toBe("true")
+    hang = false
+    $<HTMLFormElement>("form").requestSubmit()
+    await expect.poll(() => onSubmit.mock.calls.length).toBe(1)
+    expect($("form").dataset.checking).toBeUndefined()
+  })
+
+  test("a newer submit that finishes at once also drops the running check", async () => {
+    const onSubmit = vi.fn(prevent)
+    let slow = true
+    const validate = (value: string | string[]) =>
+      slow && value === "" ? new Promise<string>(() => {}) : ""
+    await render(
+      <Dilekce onSubmit={onSubmit}>
+        <DilekceField name="a" label="A" validate={validate}>
+          <DilekceInput />
+        </DilekceField>
+        <button type="submit">Go</button>
+      </Dilekce>,
+    )
+    $<HTMLFormElement>("form").requestSubmit()
+    await sleep(30)
+    slow = false
+    $<HTMLFormElement>("form").requestSubmit()
+    await sleep(30)
+    expect(onSubmit).toHaveBeenCalledOnce()
+    expect($("form").dataset.checking).toBeUndefined()
+  })
+
+  test("the rule gets a signal, aborted by a newer check, a reset and an unmount", async () => {
+    const signals: AbortSignal[] = []
+    const validate = (
+      _value: string | string[],
+      _data: FormData,
+      options: { signal: AbortSignal },
+    ) => {
+      // (Absent from a validator that predates the signal.)
+      if (options) signals.push(options.signal)
+      return new Promise<string>(() => {})
+    }
+    const screen = await render(
+      <Dilekce onSubmit={prevent}>
+        <DilekceField name="a" label="A" validate={validate}>
+          <DilekceInput />
+        </DilekceField>
+        <button type="submit">Go</button>
+      </Dilekce>,
+    )
+    const form = $<HTMLFormElement>("form")
+    form.requestSubmit()
+    await sleep(10)
+    expect(signals).toHaveLength(1)
+    expect(signals[0]!.aborted).toBe(false)
+    // A newer check of the field.
+    form.requestSubmit()
+    await sleep(10)
+    expect(signals).toHaveLength(2)
+    expect(signals[0]!.aborted).toBe(true)
+    expect(signals[1]!.aborted).toBe(false)
+    // A reset.
+    form.reset()
+    await sleep(10)
+    expect(signals[1]!.aborted).toBe(true)
+    // An unmount.
+    form.requestSubmit()
+    await sleep(10)
+    expect(signals[2]!.aborted).toBe(false)
+    screen.unmount()
+    expect(signals[2]!.aborted).toBe(true)
+  })
+
+  test("a stale answer doesn't fail the submit; the newest outcome does", async () => {
+    const onSubmit = vi.fn(prevent)
+    const onInvalidSubmit = vi.fn()
+    const runs: Array<(message: string) => void> = []
+    await render(
+      <Dilekce onSubmit={onSubmit} onInvalidSubmit={onInvalidSubmit}>
+        <DilekceField
+          name="a"
+          label="A"
+          validate={() => new Promise<string>((resolve) => runs.push(resolve))}
+        >
+          <DilekceInput />
+        </DilekceField>
+        <button type="submit">Go</button>
+      </Dilekce>,
+    )
+    $<HTMLFormElement>("form").requestSubmit()
+    await sleep(10)
+    await userEvent.type($("[name=a]"), "x")
+    await userEvent.tab()
+    await expect.poll(() => runs.length).toBe(2)
+    // The newest run is fine, the older one (for the old value) says no.
+    runs[1]!("")
+    runs[0]!("Bad for empty")
+    // The submit goes on and validates the edited value once more.
+    await expect.poll(() => runs.length).toBe(3)
+    runs[2]!("")
+    await expect.poll(() => onSubmit.mock.calls.length).toBe(1)
+    expect(onInvalidSubmit).not.toHaveBeenCalled()
+    expect(errorOf("a")).toBeNull()
+  })
+
+  test("a control without a name edited during the check is checked again", async () => {
+    const onSubmit = vi.fn(prevent)
+    let release: (message: string) => void = () => {}
+    let first = true
+    const validate = () => {
+      if (!first) return Promise.resolve("")
+      return new Promise<string>((resolve) => (release = resolve))
+    }
+    await render(
+      <Dilekce onSubmit={onSubmit}>
+        <DilekceField label="Slow" validate={validate}>
+          <DilekceInput data-testid="slow" />
+        </DilekceField>
+        <DilekceField label="Req">
+          <DilekceInput required data-testid="req" />
+        </DilekceField>
+        <button type="submit">Go</button>
+      </Dilekce>,
+    )
+    const req = $<HTMLInputElement>("[data-testid=req]")
+    await userEvent.type(req, "x")
+    $<HTMLFormElement>("form").requestSubmit()
+    await sleep(20)
+    await userEvent.clear(req)
+    first = false
+    release("")
+    await expect
+      .poll(() => req.closest("[data-slot=dilekce-field]")?.getAttribute("data-invalid"))
+      .toBe("true")
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  test("nothing happens after the form unmounts", async () => {
+    const onSubmit = vi.fn(prevent)
+    const onInvalidSubmit = vi.fn()
+    let release: (message: string) => void = () => {}
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    const screen = await render(
+      <Dilekce onSubmit={onSubmit} onInvalidSubmit={onInvalidSubmit}>
+        <DilekceField
+          name="s"
+          label="Slow"
+          validate={() => new Promise<string>((resolve) => (release = resolve))}
+        >
+          <DilekceInput />
+        </DilekceField>
+      </Dilekce>,
+    )
+    $<HTMLFormElement>("form").requestSubmit()
+    await sleep(10)
+    screen.unmount()
+    release("Bad")
+    await sleep(50)
+    expect(onInvalidSubmit).not.toHaveBeenCalled()
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
+    error.mockRestore()
+  })
+
+  test("a reset button outside the form clears server errors from a click", async () => {
+    await render(
+      <div>
+        <Dilekce id="outside" errors={{ a: "Taken" }}>
+          <DilekceField name="a" label="A">
+            <DilekceInput />
+          </DilekceField>
+        </Dilekce>
+        <button type="reset" form="outside">
+          Reset
+        </button>
+      </div>,
+    )
+    expect(errorOf("a")).toBe("Taken")
+    $<HTMLButtonElement>("button[type=reset]").click()
+    await expect.poll(() => errorOf("a")).toBeNull()
+  })
+
+  test("a reset button outside the form clears server errors from the keyboard", async () => {
+    await render(
+      <div>
+        <Dilekce id="outside" errors={{ a: "Taken" }}>
+          <DilekceField name="a" label="A">
+            <DilekceInput />
+          </DilekceField>
+        </Dilekce>
+        <button type="reset" form="outside">
+          Reset
+        </button>
+      </div>,
+    )
+    $<HTMLButtonElement>("button[type=reset]").focus()
+    await userEvent.keyboard("{Enter}")
+    await expect.poll(() => errorOf("a")).toBeNull()
+  })
+
+  test("a reset button of another form leaves this form's errors alone", async () => {
+    await render(
+      <div>
+        <Dilekce id="one" errors={{ a: "Taken" }}>
+          <DilekceField name="a" label="A">
+            <DilekceInput />
+          </DilekceField>
+        </Dilekce>
+        <form id="two" />
+        <button type="reset" form="two">
+          Reset
+        </button>
+      </div>,
+    )
+    $<HTMLButtonElement>("button[type=reset]").click()
+    await sleep(50)
+    expect(errorOf("a")).toBe("Taken")
+  })
+
+  test("a controlled value and its rule changing together are checked with the new rule", async () => {
+    function Page() {
+      const [state, set] = React.useState({ value: "a", match: "b" })
+      return (
+        <Dilekce onSubmit={prevent}>
+          <DilekceField
+            name="a"
+            label="A"
+            validate={(value) => (value === state.match ? null : "No match")}
+          >
+            <DilekceInput value={state.value} onChange={() => {}} />
+          </DilekceField>
+          <button type="submit">Go</button>
+          <button type="button" onClick={() => set({ value: "c", match: "c" })}>
+            Both
+          </button>
+        </Dilekce>
+      )
+    }
+    await render(<Page />)
+    $<HTMLFormElement>("form").requestSubmit()
+    await expect.poll(() => errorOf("a")).toBe("No match")
+    $<HTMLButtonElement>("button[type=button]").click()
+    await sleep(30)
+    expect(errorOf("a")).toBeNull()
+  })
+
+  test("a disabled control's value isn't the field's value", async () => {
+    const validate = vi.fn(() => null)
+    await render(
+      <Dilekce onSubmit={prevent}>
+        <DilekceField name="a" label="A" validate={validate}>
+          <DilekceInput name="first" disabled defaultValue="x" />
+          <DilekceInput name="second" defaultValue="y" />
+        </DilekceField>
+        <button type="submit">Go</button>
+      </Dilekce>,
+    )
+    $<HTMLFormElement>("form").requestSubmit()
+    await sleep(20)
+    expect(validate).toHaveBeenCalledWith("y", expect.any(FormData), expect.anything())
   })
 })

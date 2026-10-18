@@ -166,14 +166,22 @@ once a message shows, and on submit.
 A rule can be async. While it runs the field shows the `pending` message and
 carries `data-pending` and `aria-busy`. On submit the form waits
 (`data-checking`, `aria-busy`) and submits again once every rule passes. Only
-the newest run sets the message, so a slow answer to an old value is dropped.
-A rule that throws doesn't block the field.
+the newest run sets the message, so a slow answer to an old value is dropped,
+and a submit uses each field's newest answer. A newer submit supersedes a check
+still running, so a rule that never settles can't leave the form stuck. A rule
+that throws doesn't block the field.
+
+The rule gets a third argument, `{ signal }`: an `AbortSignal` that is aborted
+when a newer check of the field starts, the form resets or the field unmounts.
+Pass it on to cancel the work:
 
 ```tsx
 <DilekceField
   name="username"
   label="Username"
-  validate={async (value) => ((await taken(String(value))) ? "Already taken" : null)}
+  validate={async (value, _data, { signal }) =>
+    (await taken(String(value), { signal })) ? "Already taken" : null
+  }
 >
   <DilekceInput required />
 </DilekceField>

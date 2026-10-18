@@ -27,11 +27,14 @@ type ValidatorResult = string | null | undefined | false
  * A rule constraint validation can't express: return a message, or nothing
  * when the value is fine. Gets the field's value (an array for a checkbox
  * group) and the whole form's data, for rules that compare fields. May be
- * async; the field shows `pending` while it runs.
+ * async; the field shows `pending` while it runs. The optional third argument
+ * carries an `AbortSignal`, aborted when a newer check of the field starts,
+ * the form resets or the field unmounts: pass it to `fetch` to cancel.
  */
 export type DilekceValidator = (
   value: string | string[],
   data: FormData,
+  options: { signal: AbortSignal },
 ) => ValidatorResult | Promise<ValidatorResult>
 
 export interface DilekceOption {
@@ -212,6 +215,28 @@ function snapshot(form: HTMLFormElement) {
   )
 }
 
+/**
+ * `snapshot` plus the controls without a name, which FormData leaves out: what
+ * a check compares to tell that the user edited the form while it ran.
+ */
+function fingerprint(form: HTMLFormElement) {
+  const unnamed = [...form.elements].flatMap<[string, number, string | boolean | string[]]>(
+    (el, index) => {
+      if (el.matches(":disabled")) return []
+      if (el instanceof HTMLSelectElement) {
+        return el.name
+          ? []
+          : [[el.id, index, [...el.selectedOptions].map((option) => option.value)]]
+      }
+      if (el instanceof HTMLTextAreaElement) return el.name ? [] : [[el.id, index, el.value]]
+      if (!(el instanceof HTMLInputElement) || el.name || ADVANCE_SKIP.has(el.type)) return []
+      const checkable = el.type === "radio" || el.type === "checkbox"
+      return [[el.id, index, checkable ? el.checked : el.value]]
+    },
+  )
+  return snapshot(form) + JSON.stringify(unnamed)
+}
+
 /** What a filled-in field says, as text: the value a reader would copy. */
 function displayText(field: HTMLElement) {
   const choices = field.querySelector("[data-slot=dilekce-choices]")
@@ -304,7 +329,9 @@ function valueOf(field: HTMLElement): string | string[] {
   const group = field.querySelector("[data-slot=dilekce-choices]")
   const picked = [...field.querySelectorAll<HTMLInputElement>("input:checked:not(:disabled)")]
   if (group?.getAttribute("role") === "group") return picked.map((input) => input.value)
-  const control = controlOf(field)
+  const control = [...field.querySelectorAll<HTMLInputElement>(CONTROL)].find(
+    (el) => !isDisabled(el),
+  )
   if (!control || control.type === "file") return ""
   if (control.type === "radio" || control.type === "checkbox") return picked[0]?.value ?? ""
   return control.value
@@ -406,13 +433,18 @@ function Dilekce({
   React.useEffect(() => {
     const form = formRef.current
     if (!form) return
+    // On the document: a reset button may sit outside the form (`form="id"`).
     const onClick = (event: Event) => {
-      if (!(event.target as Element).closest("button[type=reset], input[type=reset]")) return
+      const button = (event.target as Element).closest<HTMLButtonElement | HTMLInputElement>(
+        "button[type=reset], input[type=reset]",
+      )
+      if (button?.form !== form) return
       resetButton.current = true
       setTimeout(() => (resetButton.current = false))
     }
-    form.addEventListener("click", onClick, true)
-    return () => form.removeEventListener("click", onClick, true)
+    const doc = form.ownerDocument
+    doc.addEventListener("click", onClick, true)
+    return () => doc.removeEventListener("click", onClick, true)
   }, [])
 
   const clearError = React.useCallback((name: string) => {
@@ -525,6 +557,15 @@ function Dilekce({
   const approved = React.useRef(false)
   // The values the running check was started with: edits made meanwhile get checked again.
   const checkingRef = React.useRef<string | null>(null)
+  // Each submit takes a number; only the newest check may go on to replay or fail.
+  const submitRun = React.useRef(0)
+  const alive = React.useRef(false)
+  React.useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
 
   const fail = (controls: HTMLElement[]) => {
     controls.sort(inDocumentOrder)
@@ -558,11 +599,6 @@ function Dilekce({
           className,
         )}
         onSubmit={(event) => {
-          // A check is already running; its replay will be the one submit.
-          if (checkingRef.current != null) {
-            event.preventDefault()
-            return
-          }
           const done = () => {
             onSubmit?.(event)
             settle()
@@ -572,6 +608,13 @@ function Dilekce({
             approved.current = false
             done()
             return
+          }
+
+          // A check still running is superseded: its result is ignored.
+          const token = ++submitRun.current
+          if (checkingRef.current != null) {
+            checkingRef.current = null
+            setChecking(false)
           }
 
           // Every field shows its message at once; focus goes to the first.
@@ -591,10 +634,11 @@ function Dilekce({
           event.preventDefault()
           const form = event.currentTarget
           const submitter = (event.nativeEvent as SubmitEvent).submitter
-          const held = snapshot(form)
+          const held = fingerprint(form)
           checkingRef.current = held
           setChecking(true)
           void Promise.all(results).then((controls) => {
+            if (token !== submitRun.current || !alive.current) return
             checkingRef.current = null
             setChecking(false)
             const invalid = controls.filter((control): control is HTMLElement => control != null)
@@ -603,7 +647,7 @@ function Dilekce({
               return
             }
             // Edited while it ran: the replay validates the new values from the start.
-            approved.current = snapshot(form) === held
+            approved.current = fingerprint(form) === held
             const button = submitter as HTMLButtonElement | null
             form.requestSubmit(button?.form === form ? button : undefined)
           })
@@ -834,9 +878,11 @@ function DilekceField({
     [form?.messages, messages],
   )
 
-  // Latest values for the handle and checks, which run outside a render.
+  // Latest values for the handle and checks, which run outside a render. An
+  // insertion effect runs before every layout effect, so a control's `sync`
+  // (a layout effect of the child) already sees this render's rule.
   const latest = React.useRef({ external, all, validate, native })
-  React.useLayoutEffect(() => {
+  React.useInsertionEffect(() => {
     latest.current = { external, all, validate, native }
   })
   React.useLayoutEffect(() => {
@@ -848,6 +894,14 @@ function DilekceField({
    * shows `pending` and only the newest run may set the message.
    */
   const run = React.useRef(0)
+  // What the newest check came to (or will): a superseded run answers with this.
+  const newest = React.useRef<string | null | Promise<string | null>>(null)
+  // Aborts the validator call in flight.
+  const controller = React.useRef<AbortController | null>(null)
+  const cancel = React.useCallback(() => {
+    controller.current?.abort()
+    controller.current = null
+  }, [])
   // The value the message on show was last worked out for.
   const checked = React.useRef("")
   // Said last through the live region, so a message that stays the same isn't repeated.
@@ -856,54 +910,62 @@ function DilekceField({
    * `quiet` is a submit: the form announces how many fields need attention and
    * focus lands on the first, so the messages themselves aren't read out.
    */
-  const check = React.useCallback((quiet = false): string | null | Promise<string | null> => {
-    const field = fieldRef.current
-    if (!field) return null
-    const { all, validate } = latest.current
-    const token = ++run.current
-    checked.current = JSON.stringify(valueOf(field))
-    if (allDisabled(field)) {
-      setPending(false)
-      setNative(null)
-      return null
-    }
-    const found = readValidity(field, all)
-    if (found || !validate) {
-      if (quiet) spoken.current = found
-      setPending(false)
-      setNative(found)
-      return found
-    }
-    const data = new FormData(field.closest("form") ?? undefined)
-    const value = valueOf(field)
-    const asMessage = (result: ValidatorResult) =>
-      typeof result === "string" && result !== "" ? result : null
+  const check = React.useCallback(
+    (quiet = false): string | null | Promise<string | null> => {
+      const field = fieldRef.current
+      if (!field) return null
+      const { all, validate } = latest.current
+      const token = ++run.current
+      // A newer check cancels the one still running.
+      cancel()
+      checked.current = JSON.stringify(valueOf(field))
+      if (allDisabled(field)) {
+        setPending(false)
+        setNative(null)
+        return (newest.current = null)
+      }
+      const found = readValidity(field, all)
+      if (found || !validate) {
+        if (quiet) spoken.current = found
+        setPending(false)
+        setNative(found)
+        return (newest.current = found)
+      }
+      const data = new FormData(field.closest("form") ?? undefined)
+      const value = valueOf(field)
+      const asMessage = (result: ValidatorResult) =>
+        typeof result === "string" && result !== "" ? result : null
 
-    const result = validate(value, data)
-    if (!isThenable<ValidatorResult>(result)) {
-      if (quiet) spoken.current = asMessage(result)
-      setPending(false)
-      setNative(asMessage(result))
-      return asMessage(result)
-    }
-    setPending(true)
-    return Promise.resolve(result).then(
-      (resolved) => {
-        const message = asMessage(resolved)
-        if (token === run.current) {
+      const abort = new AbortController()
+      controller.current = abort
+      const result = validate(value, data, { signal: abort.signal })
+      if (!isThenable<ValidatorResult>(result)) {
+        if (quiet) spoken.current = asMessage(result)
+        setPending(false)
+        setNative(asMessage(result))
+        return (newest.current = asMessage(result))
+      }
+      setPending(true)
+      // A superseded run answers with the newest outcome, never its own stale message.
+      return (newest.current = Promise.resolve(result).then(
+        (resolved) => {
+          if (token !== run.current) return newest.current
+          const message = asMessage(resolved)
           if (quiet) spoken.current = message
           setPending(false)
           setNative(message)
-        }
-        return message
-      },
-      () => {
-        // A rule that throws can't vouch for the value; it doesn't block it either.
-        if (token === run.current) setPending(false)
-        return null
-      },
-    )
-  }, [])
+          return message
+        },
+        () => {
+          // A rule that throws can't vouch for the value; it doesn't block it either.
+          if (token !== run.current) return newest.current
+          setPending(false)
+          return null
+        },
+      ))
+    },
+    [cancel],
+  )
 
   const readCount = React.useCallback(() => {
     const control = controlOf(fieldRef.current)
@@ -943,6 +1005,8 @@ function DilekceField({
       },
       reset: () => {
         run.current++
+        cancel()
+        newest.current = null
         setNative(null)
         setPending(false)
         setDirty(false)
@@ -950,7 +1014,17 @@ function DilekceField({
         setTimeout(readCount)
       },
     })
-  }, [form, check, readCount])
+  }, [form, check, cancel, readCount])
+
+  // Gone: nothing the running check says may touch the field, and its rule is told to stop.
+  React.useEffect(
+    () => () => {
+      run.current++
+      newest.current = null
+      cancel()
+    },
+    [cancel],
+  )
 
   /*
    * A message that won't fit beside the label (within 60% of the cell) moves

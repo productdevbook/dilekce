@@ -44,11 +44,16 @@ the types `DilekceMode`, `DilekceDensity`, `DilekceMessages`, `DilekceErrors`,
 - `DilekceInput`, `DilekceNumber`: `leading`, `trailing` affixes.
 - `DilekceCheckboxGroup` is uncontrolled unless `value` is passed.
 - Behaviour worth knowing (each has a test):
-  - A second submit while an async `validate` runs is ignored; the replay
-    goes through once, and re-validates when values changed during the check.
+  - A newer submit supersedes an async check still running (the older result
+    is ignored, so a rule that never settles can't wedge the form); the replay
+    goes through once, and re-validates when values changed during the check
+    (unnamed controls included). A superseded field run answers with the
+    newest outcome, never its own stale message. After an unmount a resolving
+    check does nothing (no `onInvalidSubmit`, focus or state).
   - `errors` passed in survive the `reset` React 19 fires after a function
     action (`useActionState`). `onReset` clears the internal copy only if the
-    user edited away from the prop, or if a reset button was clicked.
+    user edited away from the prop, or if a reset button was clicked (also one outside
+    the form, `form="id"`: the click is heard on the document).
   - A user `ref` is merged with the internal one (`useMergedRef`) on `Dilekce`,
     `DilekceField`, `DilekceNumber` and `DilekceSelect`. Any new component
     that sets an internal ref and spreads `...props` must do the same.
@@ -57,7 +62,9 @@ the types `DilekceMode`, `DilekceDensity`, `DilekceMessages`, `DilekceErrors`,
     `errors` match the field's name or its control's.
   - Disabled controls (own attribute or a disabled `DilekceSection`) skip
     validation, `advance`, scrub and steppers. Checked at event time with
-    `:disabled`, never only from the prop.
+    `:disabled`, never only from the prop. `valueOf` reads the first enabled
+    control. A field's latest props live in an insertion effect, so a
+    control's layout-effect `sync()` sees this render's `validate`.
   - `step="any"` steppers move by 1, keeping the value's decimals.
 - Message keys beyond validity: `pending`, `invalidOne`, `invalidMany`
   (`{count}`), `copy`, `copied`.
@@ -129,10 +136,14 @@ bun run build            # registry + static demo
 
 ## Project Status
 
-v0.1. The full gate (`bun run test`) is green: 81 tests, zero lint warnings,
+v0.1. The full gate (`bun run test`) is green: 92 tests, zero lint warnings,
 zero typecheck errors (default and strict). Correctness audit items fixed:
 double submit, action errors surviving reset, ref merging, value from
-controls, disabled, programmatic writes, `step="any"`, strict TS. Accessibility
+controls, disabled, programmatic writes, `step="any"`, strict TS. Review round 1
+(async checks) fixed: a hung rule can't wedge the form (newer submit supersedes,
+`signal` passed to rules), stale results don't fail a submit, unnamed controls
+count as edits, nothing runs after unmount, an outside reset button clears
+server errors, `sync()` sees the current `validate`. Accessibility
 audit P1 #12 to #15 and the P2/P3 items fixed (forced colors, opaque tints,
 one polite live region per form, checkbox group semantics, named 24px steppers
 that also work on click, 24px copy button, affixes in the description, focus
