@@ -179,6 +179,15 @@ function controlOf(field: HTMLElement | null) {
   return field?.querySelector<HTMLInputElement>(CONTROL) ?? null
 }
 
+/** Disabled by its own attribute or by a disabled <fieldset> around it. */
+const isDisabled = (control: Element) => control.matches(":disabled")
+
+/** A field whose controls are all disabled is not part of the form: nothing to check. */
+function allDisabled(field: HTMLElement) {
+  const controls = [...field.querySelectorAll(CONTROL)]
+  return controls.length > 0 && controls.every(isDisabled)
+}
+
 const isThenable = <T,>(value: unknown): value is PromiseLike<T> =>
   typeof (value as PromiseLike<T> | null)?.then === "function"
 
@@ -245,7 +254,7 @@ function nextControl(form: HTMLFormElement, from: HTMLElement) {
   const seenRadios = new Set<string>()
   const seenGroups = new Set<Element>()
   const controls = [...form.querySelectorAll<HTMLInputElement>(CONTROL)].filter((el) => {
-    if (el.disabled || el.getClientRects().length === 0) return false
+    if (isDisabled(el) || el.getClientRects().length === 0) return false
     // A radio group is one stop: its checked radio, or its first.
     if (el.type === "radio") {
       if (seenRadios.has(el.name)) return false
@@ -306,7 +315,7 @@ function readValidity(field: HTMLElement, messages: DilekceMessages): string | n
   }
 
   const control = controlOf(field)
-  if (!control || control.disabled || control.validity.valid) return null
+  if (!control || isDisabled(control) || control.validity.valid) return null
   for (const key of VALIDITY_KEYS) {
     if (!control.validity[key]) continue
     if (key === "customError") return control.validationMessage
@@ -780,6 +789,11 @@ function DilekceField({
     if (!field) return null
     const { all, validate } = latest.current
     const token = ++run.current
+    if (allDisabled(field)) {
+      setPending(false)
+      setNative(null)
+      return null
+    }
     const found = readValidity(field, all)
     if (found || !validate) {
       setPending(false)
@@ -829,6 +843,7 @@ function DilekceField({
         const field = fieldRef.current
         if (!field) return null
         const result = check()
+        if (allDisabled(field)) return null
         const blocked = (message: string | null) =>
           hasContent(latest.current.external) || message ? controlOf(field) : null
         return isThenable<string | null>(result)
@@ -941,7 +956,7 @@ function DilekceField({
             return
           }
           const control = controlOf(event.currentTarget)
-          if (!control || control.disabled) return
+          if (!control || isDisabled(control)) return
           event.preventDefault()
           control.focus()
           if (control instanceof HTMLSelectElement && !readOnly) {
@@ -1323,7 +1338,7 @@ function DilekceNumber({
 
   const nudge = React.useCallback((direction: 1 | -1) => {
     const input = inputRef.current
-    if (!input || input.readOnly || input.disabled) return
+    if (!input || input.readOnly || isDisabled(input)) return
     const before = input.value
     try {
       if (direction > 0) input.stepUp()
@@ -1344,7 +1359,8 @@ function DilekceNumber({
     if (!label || !input || scrub === false || locked) return
 
     const onPointerDown = (down: PointerEvent) => {
-      if (down.button !== 0) return
+      // The input may have been disabled since this was attached, e.g. by a fieldset.
+      if (down.button !== 0 || input.readOnly || isDisabled(input)) return
       const step = Number(input.step) || 1
       const start = Number(input.value) || 0
       const min = input.min === "" ? -Infinity : Number(input.min)

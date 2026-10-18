@@ -661,6 +661,139 @@ describe("a name on the control, not the field", () => {
   })
 })
 
+describe("disabled", () => {
+  const prevent = (event: React.FormEvent) => event.preventDefault()
+
+  const scrub = (label: Element, by: number) => {
+    const box = label.getBoundingClientRect()
+    const at = (x: number, type: string) =>
+      label.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          button: 0,
+          pointerId: 1,
+          clientX: box.left + x,
+          clientY: box.top + 4,
+        }),
+      )
+    at(5, "pointerdown")
+    at(5 + by, "pointermove")
+    at(5 + by, "pointerup")
+  }
+
+  test("a disabled control's rule doesn't run and doesn't block the submit", async () => {
+    const validate = vi.fn(() => "Never")
+    const onSubmit = vi.fn(prevent)
+    const screen = await render(
+      <Dilekce onSubmit={onSubmit}>
+        <DilekceField name="a" label="A" validate={validate}>
+          <DilekceInput disabled />
+        </DilekceField>
+        <button type="submit">Save</button>
+      </Dilekce>,
+    )
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect(validate).not.toHaveBeenCalled()
+    expect(onSubmit).toHaveBeenCalledOnce()
+    expect(errorOf("a")).toBeNull()
+  })
+
+  test("a disabled section skips every rule and constraint inside it", async () => {
+    const validate = vi.fn(() => "Never")
+    const onSubmit = vi.fn(prevent)
+    const screen = await render(
+      <Dilekce onSubmit={onSubmit}>
+        <DilekceSection disabled>
+          <DilekceField name="a" label="A" validate={validate}>
+            <DilekceInput />
+          </DilekceField>
+          <DilekceField name="b" label="B" validate={validate}>
+            <DilekceCheckboxGroup
+              required
+              name="b"
+              options={[
+                { value: "x", label: "X" },
+                { value: "y", label: "Y" },
+              ]}
+            />
+          </DilekceField>
+        </DilekceSection>
+        <button type="submit">Save</button>
+      </Dilekce>,
+    )
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect(validate).not.toHaveBeenCalled()
+    expect(onSubmit).toHaveBeenCalledOnce()
+    expect(errorOf("a")).toBeNull()
+    expect(document.querySelector("[data-slot=dilekce-error]")).toBeNull()
+  })
+
+  test("a field with one enabled control is still checked", async () => {
+    const validate = vi.fn(() => "Not this")
+    const screen = await render(
+      <Dilekce onSubmit={prevent}>
+        <DilekceField name="a" label="A" validate={validate}>
+          <DilekceRadioGroup
+            name="a"
+            options={[
+              { value: "x", label: "X", disabled: true },
+              { value: "y", label: "Y" },
+            ]}
+          />
+        </DilekceField>
+        <button type="submit">Save</button>
+      </Dilekce>,
+    )
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect(validate).toHaveBeenCalledOnce()
+    expect(errorOf("a")).toBe("Not this")
+  })
+
+  test("advance skips fields in a disabled section", async () => {
+    await render(
+      <Dilekce advance>
+        <DilekceField name="a" label="A">
+          <DilekceInput />
+        </DilekceField>
+        <DilekceSection disabled>
+          <DilekceField name="b" label="B">
+            <DilekceInput />
+          </DilekceField>
+        </DilekceSection>
+        <DilekceField name="c" label="C">
+          <DilekceInput />
+        </DilekceField>
+      </Dilekce>,
+    )
+    $("[name=a]").focus()
+    await userEvent.keyboard("{Enter}")
+    expect(document.activeElement).toBe($("[name=c]"))
+  })
+
+  test("scrub and the steppers do nothing in a disabled section, even one disabled later", async () => {
+    await render(
+      <Dilekce>
+        <DilekceSection>
+          <DilekceField name="qty" label="Qty">
+            <DilekceNumber defaultValue={5} scrub={10} />
+          </DilekceField>
+        </DilekceSection>
+      </Dilekce>,
+    )
+    const input = $<HTMLInputElement>("[name=qty]")
+    scrub($("label"), 30)
+    expect(input.value).toBe("8")
+
+    $<HTMLFieldSetElement>("fieldset").disabled = true
+    scrub($("label"), 30)
+    expect(input.value).toBe("8")
+    $("button[aria-label=Increase]").dispatchEvent(
+      new PointerEvent("pointerdown", { bubbles: true, button: 0 }),
+    )
+    expect(input.value).toBe("8")
+  })
+})
+
 describe("affixes and counter", () => {
   test("leading and trailing text sit inside the cell, around the value", async () => {
     await render(
