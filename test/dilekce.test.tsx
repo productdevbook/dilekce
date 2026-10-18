@@ -1888,8 +1888,8 @@ describe("steppers and targets", () => {
           </Dilekce>
         </>,
       )
-      // Filled: the copy button, then the (read-only) value; then the radio, the checkbox.
-      for (const kind of ["button", "text", "radio", "checkbox"]) {
+      // Filled: the (read-only) value, then its copy button; then the radio, the checkbox.
+      for (const kind of ["text", "button", "radio", "checkbox"]) {
         await userEvent.tab()
         if (kind === "text") continue
         const target = document.activeElement as HTMLInputElement | HTMLButtonElement
@@ -4506,8 +4506,10 @@ describe("check your answers", () => {
     })
   }
 
-  test("Change and Copy sit side by side in tab order: copy, change, then the value", async () => {
+  test("Change and Copy sit side by side in tab order: the value, copy, then change", async () => {
     await render(<Answers onEdit={() => {}} />)
+    await userEvent.tab()
+    expect((document.activeElement as HTMLElement).dataset.slot).toBe("dilekce-input")
     await userEvent.tab()
     expect((document.activeElement as HTMLElement).dataset.slot).toBe("dilekce-copy")
     await userEvent.tab()
@@ -4552,6 +4554,7 @@ describe("check your answers", () => {
     await emulate([{ name: "forced-colors", value: "active" }])
     await render(<Answers onEdit={() => {}} />)
     const change = changes()[0] as HTMLElement
+    await userEvent.tab()
     await userEvent.tab()
     await userEvent.tab()
     expect(document.activeElement).toBe(change)

@@ -2282,7 +2282,7 @@ function DilekceField({
       setBelow(false)
       return
     }
-    const check = () => setBelow(overflows(field, node, text))
+    const check = () => setBelow(overflows(field, node, text, labelRef.current))
     check()
     const observer = new ResizeObserver(check)
     observer.observe(field)
@@ -2453,6 +2453,26 @@ function DilekceField({
             {count.length}/{count.max}
           </span>
         )}
+        {children}
+        {emptyText != null && (
+          // Real text, so it is read: shown only where the dash would be.
+          <span
+            data-slot="dilekce-empty"
+            className="pointer-events-none hidden self-start text-(length:--dk-text) leading-[1.4] text-muted-foreground [grid-area:control] group-has-[:placeholder-shown]/field:block group-has-data-empty/field:block"
+          >
+            {emptyText}
+          </span>
+        )}
+        {description != null && (
+          <p
+            id={descriptionId}
+            data-slot="dilekce-description"
+            className="m-0 text-[calc(var(--dk-text)*0.78)] leading-snug text-muted-foreground [grid-area:description] group-data-[mode=filled]/dilekce:hidden"
+          >
+            {description}
+          </p>
+        )}
+        {/* After the control, so Tab goes control, then its own Copy and Change. */}
         {(copyable || changeable) && (
           <span
             data-slot="dilekce-field-actions"
@@ -2548,25 +2568,6 @@ function DilekceField({
               ))}
           </span>
         )}
-        {children}
-        {emptyText != null && (
-          // Real text, so it is read: shown only where the dash would be.
-          <span
-            data-slot="dilekce-empty"
-            className="pointer-events-none hidden self-start text-(length:--dk-text) leading-[1.4] text-muted-foreground [grid-area:control] group-has-[:placeholder-shown]/field:block group-has-data-empty/field:block"
-          >
-            {emptyText}
-          </span>
-        )}
-        {description != null && (
-          <p
-            id={descriptionId}
-            data-slot="dilekce-description"
-            className="m-0 text-[calc(var(--dk-text)*0.78)] leading-snug text-muted-foreground [grid-area:description] group-data-[mode=filled]/dilekce:hidden"
-          >
-            {description}
-          </p>
-        )}
       </div>
     </FieldContext.Provider>
   )
@@ -2587,18 +2588,54 @@ const CHANGE = cn(
 
 let canvas: CanvasRenderingContext2D | null | undefined
 
-function overflows(field: HTMLElement, node: HTMLElement, text: string | null) {
+/** The label's full text width (untruncated, upper-cased, with its required mark). */
+function labelWidth(ctx: CanvasRenderingContext2D, label: HTMLElement) {
+  const style = getComputedStyle(label)
+  const lang = label.closest("[lang]")?.getAttribute("lang") || undefined
+  let text = label.textContent ?? ""
+  if (style.textTransform === "uppercase") text = text.toLocaleUpperCase(lang)
+  // The required mark is generated content: ` *`, or nothing (filled mode).
+  const mark = getComputedStyle(label, "::after").content.match(/^"((?:[^"\\]|\\.)*)"/)
+  if (mark?.[1]) text += mark[1]
+  ctx.font = style.font
+  if ("letterSpacing" in ctx) ctx.letterSpacing = style.letterSpacing
+  // Letter spacing is added after every character, the last one included.
+  return ctx.measureText(text).width
+}
+
+/**
+ * Whether the message belongs under the control: it takes more than 60% of the
+ * cell, or the whole label, the gap and the message don't fit on one line.
+ */
+function overflows(
+  field: HTMLElement,
+  node: HTMLElement,
+  text: string | null,
+  label: HTMLElement | null,
+) {
   const style = getComputedStyle(field)
   const inner =
     field.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight)
-  // Rich messages (not a string) are measured as laid out.
-  if (text == null) return node.scrollWidth > inner * 0.6
   canvas ??= document.createElement("canvas").getContext("2d")
-  if (!canvas) return node.scrollWidth > inner * 0.6
-  const font = getComputedStyle(node)
-  canvas.font = font.font
-  if ("letterSpacing" in canvas) canvas.letterSpacing = font.letterSpacing
-  return canvas.measureText(text).width > inner * 0.6
+  // Rich messages (not a string) are measured as laid out.
+  let message = node.scrollWidth
+  if (text != null && canvas) {
+    const font = getComputedStyle(node)
+    canvas.font = font.font
+    if ("letterSpacing" in canvas) canvas.letterSpacing = font.letterSpacing
+    message = canvas.measureText(text).width
+  }
+  if (message > inner * 0.6) return true
+  if (!label || !canvas) return false
+  // Copy and Change share the message's cell where they stay in the flow (touch):
+  // the message goes below rather than under them.
+  const actions = field.querySelector<HTMLElement>(":scope > [data-slot=dilekce-field-actions]")
+  if (actions) {
+    const box = getComputedStyle(actions)
+    if (box.display !== "none" && box.position !== "absolute") return true
+  }
+  const gap = Number.parseFloat(style.columnGap) || 0
+  return labelWidth(canvas, label) + gap + message > inner
 }
 
 /* -------------------------------------------------------------------------- */

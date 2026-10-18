@@ -453,11 +453,44 @@ describe("filled mode actions", () => {
     await userEvent.unhover($("[data-slot=dilekce-field]"))
     await vi.waitFor(() => expect(style(actions()).opacity).toBe("0"))
     await userEvent.tab()
+    expect(document.activeElement?.getAttribute("data-slot")).toBe("dilekce-input")
+    await userEvent.tab()
     expect(document.activeElement?.getAttribute("data-slot")).toBe("dilekce-copy")
     await vi.waitFor(() => expect(style(actions()).opacity).toBe("1"))
     await userEvent.tab()
     expect(document.activeElement?.getAttribute("data-slot")).toBe("dilekce-change")
     expect(style(actions()).opacity).toBe("1")
+  })
+
+  test("tab order: a field's control, then its own actions, then the next field", async () => {
+    await render(
+      <Dilekce mode="filled" onEdit={() => {}}>
+        <DilekceRow>
+          <DilekceField name="a" label="First">
+            <DilekceInput defaultValue="one" />
+          </DilekceField>
+          <DilekceField name="b" label="Second">
+            <DilekceInput defaultValue="two" />
+          </DilekceField>
+        </DilekceRow>
+      </Dilekce>,
+    )
+    const seen: string[] = []
+    for (let i = 0; i < 6; i++) {
+      await userEvent.tab()
+      const el = document.activeElement as HTMLElement
+      seen.push(
+        `${el.closest("[data-slot=dilekce-field]")?.querySelector("input")?.name}:${el.dataset.slot}`,
+      )
+    }
+    expect(seen).toEqual([
+      "a:dilekce-input",
+      "a:dilekce-copy",
+      "a:dilekce-change",
+      "b:dilekce-input",
+      "b:dilekce-copy",
+      "b:dilekce-change",
+    ])
   })
 
   test("coarse pointers: always visible and in flow, so they take the label's room", async () => {
@@ -545,5 +578,46 @@ describe("filled mode affixes", () => {
     expect(input.getBoundingClientRect().right).toBeLessThan(affix.getBoundingClientRect().left + 1)
     expect(affix.getBoundingClientRect().left - input.getBoundingClientRect().right).toBeLessThan(8)
     expect(input.getBoundingClientRect().width).toBeGreaterThan(100)
+  })
+})
+
+describe("message beside or below the label", () => {
+  const label = () => $("[data-slot=dilekce-label]").getBoundingClientRect()
+  const error = () => $("[data-slot=dilekce-error]").getBoundingClientRect()
+
+  function Narrow({ label }: { label: string }) {
+    return (
+      <div style={{ width: 390 }}>
+        <Dilekce lang="tr" messages={{ ...dilekceMessages.tr }}>
+          <DilekceRow>
+            <DilekceField name="d" label={label} style={{ flex: "none", width: 195 }}>
+              <DilekceInput required />
+            </DilekceField>
+          </DilekceRow>
+        </Dilekce>
+      </div>
+    )
+  }
+
+  test("a long label whose full text plus the message does not fit moves the message below", async () => {
+    await render(<Narrow label="Teslim alma tarihi" />)
+    const form = $<HTMLFormElement>("form")
+    form.requestSubmit()
+    await vi.waitFor(() =>
+      expect($("[data-slot=dilekce-field]").hasAttribute("data-below")).toBe(true),
+    )
+    expect(error().top).toBeGreaterThanOrEqual(label().bottom)
+    // The label keeps its full text.
+    expect($("[data-slot=dilekce-label]").scrollWidth).toBeLessThanOrEqual(
+      $("[data-slot=dilekce-label]").clientWidth,
+    )
+  })
+
+  test("a short label keeps a short message beside it, and nothing overlaps", async () => {
+    await render(<Narrow label="Ad" />)
+    $<HTMLFormElement>("form").requestSubmit()
+    await vi.waitFor(() => expect($("[data-slot=dilekce-error]")).toBeTruthy())
+    expect($("[data-slot=dilekce-field]").hasAttribute("data-below")).toBe(false)
+    expect(label().right).toBeLessThanOrEqual(error().left + 0.5)
   })
 })
