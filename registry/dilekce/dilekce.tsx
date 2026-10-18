@@ -37,7 +37,7 @@ export type DilekceValidator = (
 export interface DilekceOption {
   value: string
   label: React.ReactNode
-  disabled?: boolean
+  disabled?: boolean | undefined
 }
 
 /** Short messages that fit beside a label. Pass `messages` to override. */
@@ -116,9 +116,9 @@ interface FormContextValue {
 interface FieldContextValue {
   id: string
   labelId: string
-  name?: string
+  name?: string | undefined
   invalid: boolean
-  describedBy?: string
+  describedBy?: string | undefined
   readOnly: boolean
   labelRef: React.RefObject<HTMLElement | null>
   /** Groups (radios, checkboxes) can't be a <label>'s target. */
@@ -340,30 +340,30 @@ const DENSITY = [
 
 export interface DilekceProps extends React.ComponentProps<"form"> {
   /** `filled` renders the same form read-only, like a completed document. */
-  mode?: DilekceMode
-  density?: DilekceDensity
+  mode?: DilekceMode | undefined
+  density?: DilekceDensity | undefined
   /** The focused cell's indicator: a line along its bottom, or all round. */
-  focus?: "line" | "ring"
+  focus?: "line" | "ring" | undefined
   /** Replaces the short validation messages, e.g. `dilekceMessages.tr`. */
-  messages?: DilekceMessages
+  messages?: DilekceMessages | undefined
   /**
    * Errors from outside the browser, keyed by field name. A field's error
    * clears once it's edited; a new object replaces the set.
    */
-  errors?: DilekceErrors
+  errors?: DilekceErrors | undefined
   /**
    * Enter moves to the next field instead of submitting, like filling in a
    * paper form or a spreadsheet. Enter in the last field submits.
    */
-  advance?: boolean
+  advance?: boolean | undefined
   /** Called when the form's values first differ from what it started with, and when they match again. */
-  onDirtyChange?: (dirty: boolean) => void
+  onDirtyChange?: ((dirty: boolean) => void) | undefined
   /** Asks before the page is left while there are unsaved changes. */
-  warnUnsaved?: boolean
+  warnUnsaved?: boolean | undefined
   /** Called with the names of the invalid fields when a submit is stopped. */
-  onInvalidSubmit?: (names: string[]) => void
+  onInvalidSubmit?: ((names: string[]) => void) | undefined
   /** In filled mode, each value gets a copy button. On by default. */
-  copyable?: boolean
+  copyable?: boolean | undefined
 }
 
 function Dilekce({
@@ -646,8 +646,8 @@ function Dilekce({
 /* -------------------------------------------------------------------------- */
 
 export interface DilekceSectionProps extends React.ComponentProps<"fieldset"> {
-  legend?: React.ReactNode
-  legendClassName?: string
+  legend?: React.ReactNode | undefined
+  legendClassName?: string | undefined
 }
 
 function DilekceSection({
@@ -725,22 +725,22 @@ const FIELD = [
 export interface DilekceFieldProps extends Omit<React.ComponentProps<"div">, "children"> {
   label: React.ReactNode
   /** Passed to the control when it has no name of its own. */
-  name?: string
+  name?: string | undefined
   /** Relative width within the row. Also sets how early the cell wraps. */
-  span?: number
-  description?: React.ReactNode
+  span?: number | undefined
+  description?: React.ReactNode | undefined
   /**
    * A message from outside the browser's own validation, such as
    * react-hook-form. While set, the field is invalid and shows it.
    */
-  error?: React.ReactNode
+  error?: React.ReactNode | undefined
   /** Override the short messages for this field alone. */
-  messages?: DilekceMessages
+  messages?: DilekceMessages | undefined
   /**
    * A rule of your own, run after the browser's constraints pass: on leaving
    * the field after an edit, live once a message shows, and on submit.
    */
-  validate?: DilekceValidator
+  validate?: DilekceValidator | undefined
   children: React.ReactNode
 }
 
@@ -1149,10 +1149,10 @@ const CONTROL_CLASS = cn(
 
 /** The props a control takes from its field. */
 function useControl(props: {
-  id?: string
-  name?: string
-  readOnly?: boolean
-  "aria-describedby"?: string
+  id?: string | undefined
+  name?: string | undefined
+  readOnly?: boolean | undefined
+  "aria-describedby"?: string | undefined
   /** A controlled value; when it changes the field re-reads what depends on it. */
   value?: unknown
 }) {
@@ -1174,9 +1174,9 @@ function useControl(props: {
 
 export interface DilekceAffixProps {
   /** Shown before the value inside the cell: a currency, `https://`, `+90`. */
-  leading?: React.ReactNode
+  leading?: React.ReactNode | undefined
   /** Shown after the value inside the cell: a unit, `kg`, `%`, `.com`. */
-  trailing?: React.ReactNode
+  trailing?: React.ReactNode | undefined
 }
 
 const AFFIX = cn(
@@ -1252,7 +1252,7 @@ export interface DilekceSelectProps extends Omit<
   "children" | "multiple"
 > {
   options: DilekceOption[]
-  placeholder?: string
+  placeholder?: string | undefined
 }
 
 /**
@@ -1395,9 +1395,9 @@ const decimals = (n: number) => {
 export interface DilekceNumberProps
   extends Omit<React.ComponentProps<"input">, "type">, DilekceAffixProps {
   /** Pixels of drag across the label per step, or `false` to turn it off. */
-  scrub?: number | false
-  decrementLabel?: string
-  incrementLabel?: string
+  scrub?: number | false | undefined
+  decrementLabel?: string | undefined
+  incrementLabel?: string | undefined
 }
 
 /**
@@ -1597,12 +1597,12 @@ const MARK = cn(
 
 interface GroupProps<V> extends Omit<React.ComponentProps<"div">, "defaultValue" | "onChange"> {
   options: DilekceOption[]
-  name?: string
-  value?: V
-  defaultValue?: V
-  onValueChange?: (value: V) => void
-  required?: boolean
-  disabled?: boolean
+  name?: string | undefined
+  value?: V | undefined
+  defaultValue?: V | undefined
+  onValueChange?: ((value: V) => void) | undefined
+  required?: boolean | undefined
+  disabled?: boolean | undefined
 }
 
 /** Read-only radios and checkboxes keep focus but ignore changes. */

@@ -33,8 +33,9 @@
     "lint": "oxlint . && oxfmt --check .",
     "lint:fix": "oxlint . --fix && oxfmt .",
     "fmt": "oxfmt .",
-    "test": "bun run lint && bun run typecheck && vitest run",
-    "typecheck": "tsc --noEmit"
+    "test": "bun run lint && bun run typecheck && bun run typecheck:strict && vitest run",
+    "typecheck": "tsc --noEmit",
+    "typecheck:strict": "tsc --noEmit -p tsconfig.strict.json"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
