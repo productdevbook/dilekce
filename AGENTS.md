@@ -30,13 +30,43 @@ components.json             # shadcn config for the demo project
 One file, copied into the user's project by `npx shadcn add`. Exports:
 `Dilekce`, `DilekceSection`, `DilekceRow`, `DilekceField`, `DilekceInput`,
 `DilekceTextarea`, `DilekceSelect`, `DilekceNumber`, `DilekceRadioGroup`,
-`DilekceCheckboxGroup`, `DilekceActions`, `dilekceMessages` (`en`, `tr`), and
-the types `DilekceMode`, `DilekceDensity`, `DilekceMessages`, `DilekceErrors`,
-`DilekceOption`, `DilekceValidityKey`, `DilekceMessageKey`, `DilekceValidator`.
+`DilekceCheckboxGroup`, `DilekceActions`, `DilekceSummary`, `dilekceMessages`
+(`en`, `tr`), and the types `DilekceMode`, `DilekceDensity`, `DilekceMessages`,
+`DilekceErrors`, `DilekceOption`, `DilekceValidityKey`, `DilekceMessageKey`,
+`DilekceValidator`, `DilekceInvalidField`, `DilekceValues`, `DilekceOutput`,
+`DilekceDefaultValues`, `DilekceDefaultValue`, `StandardSchemaV1` (copied from
+the spec, no dependency).
 
-- `Dilekce`: `mode`, `density`, `focus`, `messages`, `errors`, `advance`,
-  `onDirtyChange`, `warnUnsaved`, `onInvalidSubmit(names)`, `copyable`
-  (default true). Announces the invalid count in a polite `role="status"`.
+- `Dilekce<S>`: `mode`, `density`, `focus`, `messages`, `errors`, `advance`,
+  `onDirtyChange`, `warnUnsaved`, `onInvalidSubmit(fields)` (`DilekceInvalidField`:
+  `{ name, label, message, element }`; a form-level issue has `name`/`label` ""
+  and the form as `element`), `copyable` (default true), `schema`,
+  `onValidSubmit(value, event)`, `defaultValues`. Announces the invalid count in
+  a polite `role="status"`.
+- `DilekceSummary` (`title`): error summary. Reads a small external store
+  (`createSummaryStore`) that `Dilekce` fills in `fail()` from each field's
+  `Failure` (`validate()` of the field handle resolves to a `Failure`, not
+  just a control). Fields report message changes / turning valid
+  (`reportField`), so lines go live; only fields invalid at the stop are
+  listed. With a summary mounted, focus goes to it (role=group, tabIndex -1,
+  aria-labelledby heading, not role=alert), else to the first field.
+- `schema` (Standard Schema v1): `runSchema()` builds the values (`readValues`:
+  string, `string[]` for same-name checkboxes / checkbox group / multiple
+  select, dotted names nest, disabled and `data-anonymous` skipped) and runs it
+  once per submit; every field handle's `validate(schemaRun)` takes its issues
+  by `pathKey` (path joined by "."). Stage order in `check()`: constraints,
+  `validate`, schema. Issues no enabled field `names()` claims are form-level
+  (`unclaimed`). A throwing schema doesn't block. Blur/live run the whole
+  schema and take the field's issues (pending flag only for a field checked
+  alone; a submit shows `data-checking`).
+- `defaultValues`: flattened (`flattenDefaults`; a scalar list is kept whole and
+  indexed) and written to DOM defaults AND the live value (React assigns value /
+  checkedness at mount, which would hide a later default). Applied in a layout
+  effect (before the dirty snapshot); fields apply late-mounted controls
+  themselves; controls with `data-controlled` (set from `value`/`checked`) are
+  skipped; names dropped from a new object are restored from `originals`. New
+  contents (compared by flattened JSON, so inline literals don't loop) apply and
+  `form.reset()` with `selfReset` set, so the app's `onReset` isn't called.
 - `DilekceField`: `validate` (`(value, data) => message | null | undefined |
   false`, may be async; `pending` message, `data-pending`, submit held with
   `data-checking`, newest run wins, a throwing rule doesn't block). Shows a
@@ -67,7 +97,7 @@ the types `DilekceMode`, `DilekceDensity`, `DilekceMessages`, `DilekceErrors`,
     control's layout-effect `sync()` sees this render's `validate`.
   - `step="any"` steppers move by 1, keeping the value's decimals.
 - Message keys beyond validity: `pending`, `invalidOne`, `invalidMany`
-  (`{count}`), `copy`, `copied`.
+  (`{count}`), `copy`, `copied`, `summaryTitle`.
 
 ## Build & Scripts
 
@@ -136,7 +166,7 @@ bun run build            # registry + static demo
 
 ## Project Status
 
-v0.1. The full gate (`bun run test`) is green: 92 tests, zero lint warnings,
+v0.1. The full gate (`bun run test`) is green: 130 tests, zero lint warnings,
 zero typecheck errors (default and strict). Correctness audit items fixed:
 double submit, action errors surviving reset, ref merging, value from
 controls, disabled, programmatic writes, `step="any"`, strict TS. Review round 1
@@ -151,7 +181,8 @@ outlines on `--dk-focus`, reduced motion); evidence in `docs/audit/a11y.md`,
 tests in the "accessibility" blocks at the end of `test/dilekce.test.tsx`
 (forced colors and reduced motion are emulated through `cdp()`). Left open:
 `errors` still block a resubmit until the field is edited (a product decision,
-covered by a test); P1 #16 to #22 (features), the a11y P3 items F4, F10, F12
+covered by a test); ROADMAP #16 (error summary), #17 (Standard Schema) and #18
+(`defaultValues`) are built; P1 #19 to #22 (features) are open, the a11y P3 items F4, F10, F12
 (`lang` is the app's job) and F13 (demo). Not yet published: the install URL
 points at `public/r/dilekce.json` on the `main` branch of
 `github.com/productdevbook/dilekce`, which doesn't exist yet.

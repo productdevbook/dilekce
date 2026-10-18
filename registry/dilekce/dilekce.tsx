@@ -18,9 +18,133 @@ export type DilekceMessageKey =
   | "invalidMany"
   | "copy"
   | "copied"
+  | "summaryTitle"
 export type DilekceMessages = Partial<Record<DilekceMessageKey, string>>
 /** Errors from outside the browser, such as a server: field name → message. */
 export type DilekceErrors = Record<string, string | string[] | null | undefined>
+
+/*
+ * The Standard Schema v1 interface, copied from https://github.com/standard-schema/standard-schema
+ * (MIT) so the registry item needs no dependency. Zod 3.24+, Valibot, ArkType and
+ * others implement it: pass any of their schemas as `schema`.
+ */
+/** The Standard interface. */
+export interface StandardTypedV1<Input = unknown, Output = Input> {
+  /** The Standard properties. */
+  readonly "~standard": StandardTypedV1.Props<Input, Output>
+}
+
+export declare namespace StandardTypedV1 {
+  /** The Standard properties interface. */
+  interface Props<Input = unknown, Output = Input> {
+    /** The version number of the standard. */
+    readonly version: 1
+    /** The vendor name of the schema library. */
+    readonly vendor: string
+    /** Inferred types associated with the schema. */
+    readonly types?: Types<Input, Output> | undefined
+  }
+  /** The Standard types interface. */
+  interface Types<Input = unknown, Output = Input> {
+    /** The input type of the schema. */
+    readonly input: Input
+    /** The output type of the schema. */
+    readonly output: Output
+  }
+  /** Infers the input type of a Standard. */
+  type InferInput<Schema extends StandardTypedV1> = NonNullable<
+    Schema["~standard"]["types"]
+  >["input"]
+  /** Infers the output type of a Standard. */
+  type InferOutput<Schema extends StandardTypedV1> = NonNullable<
+    Schema["~standard"]["types"]
+  >["output"]
+}
+
+/** The Standard Schema interface. */
+export interface StandardSchemaV1<Input = unknown, Output = Input> {
+  /** The Standard Schema properties. */
+  readonly "~standard": StandardSchemaV1.Props<Input, Output>
+}
+
+export declare namespace StandardSchemaV1 {
+  /** The Standard Schema properties interface. */
+  interface Props<Input = unknown, Output = Input> extends StandardTypedV1.Props<Input, Output> {
+    /** Validates unknown input values. */
+    readonly validate: (
+      value: unknown,
+      options?: StandardSchemaV1.Options | undefined,
+    ) => Result<Output> | Promise<Result<Output>>
+  }
+  /** The result interface of the validate function. */
+  type Result<Output> = SuccessResult<Output> | FailureResult
+  /** The result interface if validation succeeds. */
+  interface SuccessResult<Output> {
+    /** The typed output value. */
+    readonly value: Output
+    /** The absence of issues indicates success. */
+    readonly issues?: undefined
+  }
+  interface Options {
+    /** Implicit support for additional vendor-specific parameters, if needed. */
+    readonly libraryOptions?: Record<string, unknown> | undefined
+  }
+  /** The result interface if validation fails. */
+  interface FailureResult {
+    /** The issues of failed validation. */
+    readonly issues: ReadonlyArray<Issue>
+  }
+  /** The issue interface of the failure output. */
+  interface Issue {
+    /** The error message of the issue. */
+    readonly message: string
+    /** The path of the issue, if any. */
+    readonly path?: ReadonlyArray<PropertyKey | PathSegment> | undefined
+  }
+  /** The path segment interface of the issue. */
+  interface PathSegment {
+    /** The key representing a path segment. */
+    readonly key: PropertyKey
+  }
+  /** The Standard types interface. */
+  interface Types<Input = unknown, Output = Input> extends StandardTypedV1.Types<Input, Output> {}
+  /** Infers the input type of a Standard. */
+  type InferInput<Schema extends StandardTypedV1> = StandardTypedV1.InferInput<Schema>
+  /** Infers the output type of a Standard. */
+  type InferOutput<Schema extends StandardTypedV1> = StandardTypedV1.InferOutput<Schema>
+}
+
+/**
+ * What `onValidSubmit` gets without a schema: the form's values by name. A
+ * name is a string, or a `string[]` for several checkboxes of one name, a
+ * checkbox group and a multiple select. Numbers stay strings (`z.coerce`);
+ * a dotted name (`passengers.0.name`) nests into objects and arrays.
+ */
+export type DilekceValues = Record<string, unknown>
+
+/** What `onValidSubmit` gets: the schema's parsed output, else the values. */
+export type DilekceOutput<S> = S extends StandardSchemaV1
+  ? StandardSchemaV1.InferOutput<S>
+  : DilekceValues
+
+/** One field a stopped submit found invalid. A form-level issue has `name` and `label` empty. */
+export interface DilekceInvalidField {
+  name: string
+  /** The field label's text. */
+  label: string
+  message: string
+  /** The control to focus; the form itself for a form-level issue. */
+  element: HTMLElement
+}
+
+type DefaultScalar = string | number | boolean | null | undefined
+/** A value `defaultValues` can hold: a scalar, a list, or nested objects and arrays. */
+export type DilekceDefaultValue =
+  | DefaultScalar
+  | DilekceDefaultValue[]
+  | { [key: string]: DilekceDefaultValue }
+/** Values by field name; dotted names (`passengers.0.name`) and nested objects both work. */
+export type DilekceDefaultValues = Record<string, DilekceDefaultValue>
 
 type ValidatorResult = string | null | undefined | false
 /**
@@ -60,6 +184,7 @@ export const dilekceMessages = {
     invalidMany: "{count} fields need attention",
     copy: "Copy",
     copied: "Copied",
+    summaryTitle: "There is a problem",
   },
   tr: {
     valueMissing: "Zorunlu",
@@ -76,6 +201,7 @@ export const dilekceMessages = {
     invalidMany: "{count} alan düzeltilmeli",
     copy: "Kopyala",
     copied: "Kopyalandı",
+    summaryTitle: "Bir sorun var",
   },
 } satisfies Record<string, DilekceMessages>
 
@@ -97,13 +223,85 @@ const VALIDITY_KEYS: DilekceValidityKey[] = [
 /*                                   Context                                  */
 /* -------------------------------------------------------------------------- */
 
-type Check = HTMLElement | null
+/** What a field found wrong when validated, for the summary and `onInvalidSubmit`. */
+interface Failure {
+  /** The control to focus: the first of a group. */
+  control: HTMLElement
+  field: HTMLElement
+  label: string
+  message: string
+}
+
+/** What the schema made of the form's values. */
+interface SchemaOutcome {
+  /** The parsed output; the plain values when the schema threw. */
+  value: unknown
+  issues: Array<{ key: string; message: string }>
+  /** The first message for each field name the issues address. */
+  messages: Map<string, string>
+}
+
+/** `null`: the form has no schema. */
+type SchemaRun = SchemaOutcome | Promise<SchemaOutcome> | null
 
 interface FieldHandle {
-  /** Shows the field's message; resolves to the control to focus when invalid. */
-  validate: () => Check | Promise<Check>
+  /**
+   * Shows the field's message; resolves to what's wrong when invalid. A submit
+   * hands every field the one schema run it started.
+   */
+  validate: (schemaRun?: SchemaRun) => Failure | null | Promise<Failure | null>
   reset: () => void
+  /** A control's value changed without an event: re-read the counter. */
+  sync: () => void
+  /** The names an issue's path can address this field by; none while it is disabled. */
+  names: () => string[]
 }
+
+/** One line of the error summary: a field that was invalid when a submit was stopped. */
+interface SummaryItem {
+  field: HTMLElement
+  control: HTMLElement
+  label: string
+  message: string
+}
+
+interface SummaryState {
+  /** Counts stopped submits: the summary takes focus when it changes. */
+  stopped: number
+  items: SummaryItem[]
+  /** Schema issues no field answers for. */
+  formLevel: string[]
+}
+
+const NO_SUMMARY: SummaryState = { stopped: 0, items: [], formLevel: [] }
+
+/** An external store, so the summary can change without every field re-rendering. */
+function createSummaryStore() {
+  let state = NO_SUMMARY
+  let mounted = 0
+  const listeners = new Set<() => void>()
+  return {
+    /** Whether a `DilekceSummary` is mounted: without one, focus goes to the first field. */
+    hasSummary: () => mounted > 0,
+    attach() {
+      mounted++
+      return () => void mounted--
+    },
+    get: () => state,
+    subscribe(listener: () => void) {
+      listeners.add(listener)
+      return () => void listeners.delete(listener)
+    },
+    update(next: (current: SummaryState) => SummaryState) {
+      const value = next(state)
+      if (value === state) return
+      state = value
+      for (const listener of listeners) listener()
+    },
+  }
+}
+
+type SummaryStore = ReturnType<typeof createSummaryStore>
 
 interface FormContextValue {
   mode: DilekceMode
@@ -116,6 +314,13 @@ interface FormContextValue {
   copyable: boolean
   /** Says something through the form's one polite live region. */
   announce: (text: string) => void
+  /** Runs the schema over the form's values now; null without a schema. */
+  runSchema: () => SchemaRun
+  /** A field's message changed: the summary follows (null: it's valid now). */
+  reportField: (field: HTMLElement | null, message: string | null) => void
+  /** Applies `defaultValues` to the controls under `root`, e.g. a field that mounted late. */
+  applyDefaults: (root: ParentNode) => void
+  summary: SummaryStore
 }
 
 interface FieldContextValue {
@@ -360,6 +565,187 @@ function readValidity(field: HTMLElement, messages: DilekceMessages): string | n
 }
 
 /* -------------------------------------------------------------------------- */
+/*                       Values, schema issues and defaults                   */
+/* -------------------------------------------------------------------------- */
+
+type FormControl = HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+
+const isFormControl = (el: Element): el is FormControl =>
+  el instanceof HTMLInputElement ||
+  el instanceof HTMLSelectElement ||
+  el instanceof HTMLTextAreaElement
+
+/** Input types that carry no value of their own to read or fill. */
+const VALUELESS = new Set(["submit", "button", "reset", "image", "file"])
+
+/** Puts `value` at a dotted path, making an array where the next segment is an index. */
+function nest(root: Record<string, unknown>, name: string, value: unknown) {
+  const parts = name.split(".")
+  if (parts.includes("__proto__")) return
+  let node = root as Record<string, unknown>
+  for (const [index, key] of parts.slice(0, -1).entries()) {
+    let child = node[key]
+    if (typeof child !== "object" || child === null) {
+      child = /^\d+$/.test(parts[index + 1] ?? "") ? [] : {}
+      node[key] = child
+    }
+    node = child as Record<string, unknown>
+  }
+  node[parts.at(-1) ?? ""] = value
+}
+
+/**
+ * The form's values by name, for a schema and `onValidSubmit`. Like FormData
+ * (disabled controls and unchecked boxes are left out) except that several
+ * checkboxes of one name, a checkbox group and a multiple select give a
+ * `string[]`, empty when none is ticked, and dotted names nest.
+ */
+function readValues(form: HTMLFormElement): DilekceValues {
+  const controls = [...form.elements].filter(isFormControl)
+  const boxes = new Map<string, number>()
+  for (const el of controls) {
+    if (el instanceof HTMLInputElement && el.type === "checkbox") {
+      boxes.set(el.name, (boxes.get(el.name) ?? 0) + 1)
+    }
+  }
+  const flat = new Map<string, string | string[]>()
+  for (const el of controls) {
+    // A radio group without a name is named by the component to group its radios only.
+    if (!el.name || el.hasAttribute("data-anonymous") || isDisabled(el)) continue
+    if (el instanceof HTMLSelectElement) {
+      flat.set(el.name, el.multiple ? [...el.selectedOptions].map((o) => o.value) : el.value)
+    } else if (el instanceof HTMLTextAreaElement) {
+      flat.set(el.name, el.value)
+    } else if (el.type === "checkbox") {
+      const list =
+        (boxes.get(el.name) ?? 0) > 1 ||
+        el.closest("[data-slot=dilekce-choices]")?.getAttribute("role") === "group"
+      if (list) {
+        const values = (flat.get(el.name) as string[] | undefined) ?? []
+        flat.set(el.name, el.checked ? [...values, el.value] : values)
+      } else if (el.checked) {
+        flat.set(el.name, el.value)
+      }
+    } else if (el.type === "radio") {
+      if (el.checked) flat.set(el.name, el.value)
+    } else if (!VALUELESS.has(el.type) && !flat.has(el.name)) {
+      flat.set(el.name, el.value)
+    }
+  }
+  const values: DilekceValues = {}
+  for (const [name, value] of flat) nest(values, name, value)
+  return values
+}
+
+/** An issue's path as a field name: segments joined with ".", `{ key }` objects unwrapped. */
+const pathKey = (path: StandardSchemaV1.Issue["path"]) =>
+  (path ?? [])
+    .map((segment) => String(typeof segment === "object" ? segment.key : segment))
+    .join(".")
+
+type DefaultEntry = DefaultScalar | string[]
+
+/**
+ * `defaultValues` as dotted names: `{ passengers: [{ name: "Ada" }] }` becomes
+ * `passengers.0.name`. A list of scalars stays whole too (a checkbox group's
+ * or multiple select's value) beside its indexed names.
+ */
+function flattenDefaults(values: DilekceDefaultValues | undefined) {
+  const out = new Map<string, DefaultEntry>()
+  const walk = (path: string, value: DilekceDefaultValue) => {
+    if (Array.isArray(value)) {
+      if (value.every((item) => item == null || typeof item !== "object")) {
+        out.set(path, value.filter((item) => item != null).map(String))
+        for (const [index, item] of value.entries())
+          out.set(`${path}.${index}`, item as DefaultScalar)
+      } else {
+        for (const [index, item] of value.entries()) walk(`${path}.${index}`, item)
+      }
+    } else if (typeof value === "object" && value !== null) {
+      for (const [key, item] of Object.entries(value)) walk(`${path}.${key}`, item)
+    } else {
+      out.set(path, value)
+    }
+  }
+  for (const [key, value] of Object.entries(values ?? {})) walk(key, value)
+  return out
+}
+
+/** Puts a control's DOM defaults back to what its markup said, to restore later. */
+function defaultsOf(el: FormControl): () => void {
+  if (el instanceof HTMLSelectElement) {
+    const flags = [...el.options].map((option) => option.defaultSelected)
+    return () => {
+      for (const [index, option] of [...el.options].entries()) {
+        option.defaultSelected = flags[index] ?? false
+      }
+    }
+  }
+  if (el instanceof HTMLInputElement && (el.type === "checkbox" || el.type === "radio")) {
+    const checked = el.defaultChecked
+    return () => {
+      el.defaultChecked = checked
+    }
+  }
+  const text = el.defaultValue
+  return () => {
+    el.defaultValue = text
+  }
+}
+
+/**
+ * Sets the DOM defaults of one control, so a form reset restores them, and
+ * shows them now: React assigns a control's value or checkedness when it
+ * mounts, which stops later changes to the default from showing.
+ */
+function setDefault(el: FormControl, value: DefaultEntry) {
+  const scalar = Array.isArray(value) || typeof value === "boolean" ? "" : String(value ?? "")
+  if (el instanceof HTMLSelectElement) {
+    const list = Array.isArray(value) ? value : value == null ? [] : [String(value)]
+    for (const option of el.options) {
+      option.defaultSelected = list.includes(option.value)
+      option.selected = option.defaultSelected
+    }
+  } else if (el instanceof HTMLTextAreaElement) {
+    el.defaultValue = scalar
+    el.value = scalar
+  } else if (el.type === "checkbox" || el.type === "radio") {
+    el.defaultChecked =
+      typeof value === "boolean" && el.type === "checkbox"
+        ? value
+        : Array.isArray(value)
+          ? value.includes(el.value)
+          : value != null && String(value) === el.value
+    el.checked = el.defaultChecked
+  } else if (!VALUELESS.has(el.type)) {
+    el.defaultValue = scalar
+    el.value = scalar
+  }
+}
+
+/**
+ * Fills the controls' DOM defaults from `values` by name. Controls the app
+ * controls (`data-controlled`) are left alone, and so is the DOM default of a
+ * name `values` doesn't mention, except that a name an earlier call set is
+ * put back to its markup.
+ */
+function applyDefaultValues(
+  controls: Iterable<Element>,
+  values: Map<string, DefaultEntry>,
+  originals: WeakMap<Element, () => void>,
+) {
+  for (const el of controls) {
+    if (!isFormControl(el) || !el.name || el.hasAttribute("data-controlled")) continue
+    if (!values.has(el.name)) {
+      originals.get(el)?.()
+      continue
+    }
+    if (!originals.has(el)) originals.set(el, defaultsOf(el))
+    setDefault(el, values.get(el.name))
+  }
+}
+
+/* -------------------------------------------------------------------------- */
 /*                                    Form                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -369,7 +755,9 @@ const DENSITY = [
   "data-[density=roomy]:[--dk-col:10rem] data-[density=roomy]:[--dk-px:1rem] data-[density=roomy]:[--dk-py:0.875rem] data-[density=roomy]:[--dk-gap:0.375rem] data-[density=roomy]:[--dk-label:0.75rem] data-[density=roomy]:[--dk-text:1.0625rem]",
 ]
 
-export interface DilekceProps extends React.ComponentProps<"form"> {
+export interface DilekceProps<
+  S extends StandardSchemaV1 | undefined = undefined,
+> extends React.ComponentProps<"form"> {
   /** `filled` renders the same form read-only, like a completed document. */
   mode?: DilekceMode | undefined
   density?: DilekceDensity | undefined
@@ -391,13 +779,38 @@ export interface DilekceProps extends React.ComponentProps<"form"> {
   onDirtyChange?: ((dirty: boolean) => void) | undefined
   /** Asks before the page is left while there are unsaved changes. */
   warnUnsaved?: boolean | undefined
-  /** Called with the names of the invalid fields when a submit is stopped. */
-  onInvalidSubmit?: ((names: string[]) => void) | undefined
+  /**
+   * Called with the invalid fields, in document order, when a submit is
+   * stopped. A schema issue no field answers for comes last, with `name` empty.
+   */
+  onInvalidSubmit?: ((fields: DilekceInvalidField[]) => void) | undefined
   /** In filled mode, each value gets a copy button. On by default. */
   copyable?: boolean | undefined
+  /**
+   * Any Standard Schema (Zod, Valibot, ArkType, …) run over the form's values
+   * once the browser's constraints and the field's own `validate` pass: on
+   * submit for every field, on blur and live for the one being edited. An
+   * issue's `path` joined with "." names its field. Values are strings, so
+   * numbers need the schema to coerce (`z.coerce.number()`).
+   */
+  schema?: S | undefined
+  /**
+   * Called when a submit goes through, after `onSubmit`, with the schema's
+   * parsed output, or the form's values without a schema.
+   */
+  onValidSubmit?:
+    | ((value: DilekceOutput<S>, event: React.FormEvent<HTMLFormElement>) => void)
+    | undefined
+  /**
+   * Starting values by field name, written to the controls' DOM defaults, so a
+   * reset restores them. Dotted names and nested objects and arrays both
+   * work. Controlled controls (`value`, `checked`) keep their own. A new
+   * object with other contents applies again and resets the form to it.
+   */
+  defaultValues?: DilekceDefaultValues | undefined
 }
 
-function Dilekce({
+function Dilekce<S extends StandardSchemaV1 | undefined = undefined>({
   mode = "edit",
   density = "comfortable",
   focus = "line",
@@ -408,6 +821,9 @@ function Dilekce({
   warnUnsaved = false,
   onInvalidSubmit,
   copyable = true,
+  schema,
+  onValidSubmit,
+  defaultValues,
   className,
   children,
   onSubmit,
@@ -416,7 +832,7 @@ function Dilekce({
   onKeyDown,
   ref,
   ...props
-}: DilekceProps) {
+}: DilekceProps<S>) {
   const formRef = React.useRef<HTMLFormElement>(null)
   const mergedRef = useMergedRef(formRef, ref)
   const supplied = errorsProp ?? NO_ERRORS
@@ -490,6 +906,49 @@ function Dilekce({
     if (formRef.current) clean.current = snapshot(formRef.current)
     markDirty(false)
   }, [markDirty])
+
+  /*
+   * defaultValues: written to the controls' DOM defaults before paint (and
+   * before the first snapshot of dirty), so the browser shows them and a reset
+   * restores them. Fields that mount later apply them themselves. Another
+   * object with other contents applies again and resets the form, like
+   * react-hook-form's reset(values); an equal one, such as an inline literal
+   * re-created on every render, changes nothing.
+   */
+  const flatDefaults = React.useMemo(() => flattenDefaults(defaultValues), [defaultValues])
+  const defaultsRef = React.useRef(flatDefaults)
+  React.useInsertionEffect(() => {
+    defaultsRef.current = flatDefaults
+  })
+  const originals = React.useRef(new WeakMap<Element, () => void>())
+  const appliedDefaults = React.useRef<string | null>(null)
+  // Set while the form resets itself, so the app's own onReset isn't told.
+  const selfReset = React.useRef(false)
+  const applyDefaults = React.useCallback((root: ParentNode) => {
+    applyDefaultValues(
+      root.querySelectorAll("input, select, textarea"),
+      defaultsRef.current,
+      originals.current,
+    )
+  }, [])
+  React.useLayoutEffect(() => {
+    const form = formRef.current
+    if (!form) return
+    const signature = JSON.stringify([...flatDefaults])
+    if (signature === appliedDefaults.current) return
+    const first = appliedDefaults.current === null
+    appliedDefaults.current = signature
+    applyDefaultValues(form.elements, flatDefaults, originals.current)
+    for (const field of fields.current) field.sync()
+    if (first) return
+    selfReset.current = true
+    try {
+      form.reset()
+    } finally {
+      selfReset.current = false
+    }
+  }, [flatDefaults])
+
   React.useLayoutEffect(settle, [settle])
 
   // The one polite live region: a stopped submit says how many fields need
@@ -518,10 +977,130 @@ function Dilekce({
     })
   }, [])
 
+  /*
+   * The error summary: what a stopped submit found, kept in a store the
+   * DilekceSummary reads. Fields report when one turns valid or changes its
+   * message; schema issues no field answers for are the form-level lines.
+   */
+  const [summary] = React.useState(createSummaryStore)
+  const clearSummary = React.useCallback(
+    () =>
+      summary.update((state) =>
+        state.items.length === 0 && state.formLevel.length === 0
+          ? state
+          : { stopped: state.stopped, items: [], formLevel: [] },
+      ),
+    [summary],
+  )
+  const reportField = React.useCallback(
+    (field: HTMLElement | null, message: string | null) => {
+      if (!field) return
+      summary.update((state) => {
+        const index = state.items.findIndex((item) => item.field === field)
+        const item = state.items[index]
+        if (!item) return state
+        if (message === null) {
+          return { ...state, items: state.items.filter((_, at) => at !== index) }
+        }
+        if (message === "" || message === item.message) return state
+        return {
+          ...state,
+          items: state.items.map((it, at) => (at === index ? { ...it, message } : it)),
+        }
+      })
+    },
+    [summary],
+  )
+
+  /*
+   * The schema runs over the values built from the form. Issues are matched to
+   * fields by name; those no enabled field answers for are form-level.
+   */
+  const schemaRef = React.useRef(schema)
+  React.useInsertionEffect(() => {
+    schemaRef.current = schema
+  })
+  // Only the newest run may refresh the summary's form-level lines.
+  const schemaRun = React.useRef(0)
+  const unclaimed = React.useCallback((outcome: SchemaOutcome) => {
+    const claimed = new Set<string>()
+    for (const field of fields.current) for (const name of field.names()) claimed.add(name)
+    return outcome.issues.filter((issue) => !claimed.has(issue.key)).map((issue) => issue.message)
+  }, [])
+  const runSchema = React.useCallback((): SchemaRun => {
+    const standard = schemaRef.current?.["~standard"]
+    const form = formRef.current
+    if (!standard || !form) return null
+    const values = readValues(form)
+    const token = ++schemaRun.current
+    // A schema that throws can't vouch for the values; like a rule, it doesn't block.
+    const unchecked: SchemaOutcome = { value: values, issues: [], messages: new Map() }
+    const outcomeOf = (result: StandardSchemaV1.Result<unknown>): SchemaOutcome => {
+      if (!result.issues) return { value: result.value, issues: [], messages: new Map() }
+      const issues = result.issues.map((issue) => ({
+        key: pathKey(issue.path),
+        message: issue.message,
+      }))
+      const messages = new Map<string, string>()
+      for (const { key, message } of issues) if (!messages.has(key)) messages.set(key, message)
+      return { value: undefined, issues, messages }
+    }
+    const refresh = (outcome: SchemaOutcome) => {
+      if (token === schemaRun.current) {
+        const formLevel = unclaimed(outcome)
+        summary.update((state) =>
+          (state.items.length === 0 && state.formLevel.length === 0) ||
+          (state.formLevel.length === formLevel.length &&
+            state.formLevel.every((message, at) => message === formLevel[at]))
+            ? state
+            : { ...state, formLevel },
+        )
+      }
+      return outcome
+    }
+    let result: ReturnType<typeof standard.validate>
+    try {
+      result = standard.validate(values)
+    } catch {
+      return unchecked
+    }
+    if (!isThenable<StandardSchemaV1.Result<unknown>>(result)) return refresh(outcomeOf(result))
+    return Promise.resolve(result).then(
+      (resolved) => refresh(outcomeOf(resolved)),
+      () => unchecked,
+    )
+  }, [summary, unclaimed])
+
   const merged = React.useMemo(() => ({ ...dilekceMessages.en, ...messages }), [messages])
   const context = React.useMemo<FormContextValue>(
-    () => ({ mode, messages: merged, errors, clearError, register, measure, copyable, announce }),
-    [mode, merged, errors, clearError, register, measure, copyable, announce],
+    () => ({
+      mode,
+      messages: merged,
+      errors,
+      clearError,
+      register,
+      measure,
+      copyable,
+      announce,
+      runSchema,
+      reportField,
+      applyDefaults,
+      summary,
+    }),
+    [
+      mode,
+      merged,
+      errors,
+      clearError,
+      register,
+      measure,
+      copyable,
+      announce,
+      runSchema,
+      reportField,
+      applyDefaults,
+      summary,
+    ],
   )
 
   React.useEffect(() => {
@@ -554,7 +1133,8 @@ function Dilekce({
   }, [measure])
 
   const [checking, setChecking] = React.useState(false)
-  const approved = React.useRef(false)
+  // The second pass of an async check: already validated, with the schema's outcome.
+  const approved = React.useRef<{ outcome: SchemaOutcome | null } | null>(null)
   // The values the running check was started with: edits made meanwhile get checked again.
   const checkingRef = React.useRef<string | null>(null)
   // Each submit takes a number; only the newest check may go on to replay or fail.
@@ -567,17 +1147,42 @@ function Dilekce({
     }
   }, [])
 
-  const fail = (controls: HTMLElement[]) => {
-    controls.sort(inDocumentOrder)
-    controls[0]?.focus()
-    const count = controls.length
+  const fail = (failures: Failure[], outcome: SchemaOutcome | null) => {
+    failures.sort((a, b) => inDocumentOrder(a.control, b.control))
+    let formLevel = outcome ? unclaimed(outcome) : []
+    // Issues all addressed to fields that showed nothing: still say something.
+    if (outcome && failures.length === 0 && formLevel.length === 0) {
+      formLevel = outcome.issues.map((issue) => issue.message)
+    }
+    summary.update((state) => ({
+      stopped: state.stopped + 1,
+      items: failures.map(({ field, control, label, message }) => ({
+        field,
+        control,
+        label,
+        message,
+      })),
+      formLevel,
+    }))
+    // With a summary, it takes focus; without one, the first invalid field does.
+    if (!summary.hasSummary()) failures[0]?.control.focus()
+    const count = failures.length + formLevel.length
     const text =
       count === 1 ? merged.invalidOne : merged.invalidMany?.replace("{count}", String(count))
     // A trailing zero-width space toggles, so a repeat of the same text is read again.
     setAnnouncement((last) => (last === text ? `${text}\u200b` : (text ?? "")))
-    onInvalidSubmit?.(
-      controls.map((control) => control.getAttribute("name") ?? control.id).filter(Boolean),
-    )
+    const form = formRef.current
+    onInvalidSubmit?.([
+      ...failures.map(({ control, label, message }) => ({
+        name: control.getAttribute("name") ?? control.id,
+        label,
+        message,
+        element: control,
+      })),
+      ...(form
+        ? formLevel.map((message) => ({ name: "", label: "", message, element: form }))
+        : []),
+    ])
   }
 
   return (
@@ -599,14 +1204,20 @@ function Dilekce({
           className,
         )}
         onSubmit={(event) => {
-          const done = () => {
+          const finish = (outcome: SchemaOutcome | null) => {
             onSubmit?.(event)
+            onValidSubmit?.(
+              (outcome ? outcome.value : readValues(event.currentTarget)) as DilekceOutput<S>,
+              event,
+            )
+            clearSummary()
             settle()
           }
           // The second pass of an async check: already validated.
           if (approved.current) {
-            approved.current = false
-            done()
+            const { outcome } = approved.current
+            approved.current = null
+            finish(outcome)
             return
           }
 
@@ -617,16 +1228,18 @@ function Dilekce({
             setChecking(false)
           }
 
+          // The schema runs once; every field takes its own issues from that run.
           // Every field shows its message at once; focus goes to the first.
-          const results = [...fields.current].map((field) => field.validate())
-          if (!results.some(isThenable)) {
-            const invalid = results.filter((control): control is HTMLElement => control != null)
-            if (invalid.length > 0) {
+          const outcome = runSchema()
+          const results = [...fields.current].map((field) => field.validate(outcome))
+          if (!results.some(isThenable) && !isThenable(outcome)) {
+            const invalid = results.filter((failure): failure is Failure => failure != null)
+            if (invalid.length > 0 || (outcome && outcome.issues.length > 0)) {
               event.preventDefault()
-              fail(invalid)
+              fail(invalid, outcome)
               return
             }
-            done()
+            finish(outcome)
             return
           }
 
@@ -637,17 +1250,17 @@ function Dilekce({
           const held = fingerprint(form)
           checkingRef.current = held
           setChecking(true)
-          void Promise.all(results).then((controls) => {
+          void Promise.all([Promise.all(results), outcome]).then(([failures, resolved]) => {
             if (token !== submitRun.current || !alive.current) return
             checkingRef.current = null
             setChecking(false)
-            const invalid = controls.filter((control): control is HTMLElement => control != null)
-            if (invalid.length > 0) {
-              fail(invalid)
+            const invalid = failures.filter((failure): failure is Failure => failure != null)
+            if (invalid.length > 0 || (resolved && resolved.issues.length > 0)) {
+              fail(invalid, resolved)
               return
             }
             // Edited while it ran: the replay validates the new values from the start.
-            approved.current = fingerprint(form) === held
+            approved.current = fingerprint(form) === held ? { outcome: resolved } : null
             const button = submitter as HTMLButtonElement | null
             form.requestSubmit(button?.form === form ? button : undefined)
           })
@@ -658,7 +1271,10 @@ function Dilekce({
           resetButton.current = false
           setErrors((current) => (asked || current !== supplied ? NO_ERRORS : current))
           setAnnouncement("")
-          onReset?.(event)
+          // A schema run still going must not bring the summary back.
+          schemaRun.current++
+          clearSummary()
+          if (!selfReset.current) onReset?.(event)
           // The browser restores the values after this event; measure then.
           setTimeout(settle)
         }}
@@ -767,6 +1383,109 @@ function DilekceRow({ className, ...props }: React.ComponentProps<"div">) {
       )}
       {...props}
     />
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                   Summary                                  */
+/* -------------------------------------------------------------------------- */
+
+export interface DilekceSummaryProps extends Omit<React.ComponentProps<"div">, "title"> {
+  /** The heading; the `summaryTitle` message by default. */
+  title?: React.ReactNode | undefined
+}
+
+const noSubscribe = () => () => {}
+
+/**
+ * An error summary, like GOV.UK's: once a submit is stopped, a heading and a
+ * link to each invalid field ("Label: message") that focuses the control.
+ * Focus moves here, instead of to the first field. Lines go as their fields
+ * turn valid, and the whole summary hides when none is left or the form
+ * resets. Put it anywhere in the form, usually first.
+ */
+function DilekceSummary({ title, className, ref, ...props }: DilekceSummaryProps) {
+  const form = useForm()
+  const store = form?.summary
+  const state = React.useSyncExternalStore(
+    store?.subscribe ?? noSubscribe,
+    () => store?.get() ?? NO_SUMMARY,
+    () => NO_SUMMARY,
+  )
+  const titleId = React.useId()
+  const rootRef = React.useRef<HTMLDivElement>(null)
+  const mergedRef = useMergedRef(rootRef, ref)
+
+  // With a summary in the form, a stopped submit focuses it, not the first field.
+  React.useLayoutEffect(() => {
+    if (!store) return
+    return store.attach()
+  }, [store])
+  const seen = React.useRef(state.stopped)
+  React.useLayoutEffect(() => {
+    if (state.stopped === seen.current) return
+    seen.current = state.stopped
+    rootRef.current?.focus()
+  }, [state.stopped])
+
+  if (!form || (state.items.length === 0 && state.formLevel.length === 0)) return null
+  return (
+    <div
+      ref={mergedRef}
+      data-slot="dilekce-summary"
+      // Focused by script, like GOV.UK's; not role=alert, which would read it twice.
+      // A group, so that the name from the heading is valid on it.
+      role="group"
+      tabIndex={-1}
+      aria-labelledby={titleId}
+      className={cn(
+        "w-full min-w-0 border-l-4 border-destructive bg-[color-mix(in_oklch,var(--destructive)_5%,var(--background))] px-(--dk-px) py-(--dk-py) [--dk-danger:color-mix(in_oklch,var(--destructive)_85%,var(--foreground))] [--dk-focus:var(--destructive)]",
+        "focus:outline-3 focus:-outline-offset-3 focus:outline-solid focus:outline-(--dk-focus)",
+        "forced-colors:border forced-colors:border-l-4 forced-colors:border-[CanvasText] forced-colors:focus:outline-[Highlight]",
+        "group-data-[mode=filled]/dilekce:hidden print:hidden",
+        className,
+      )}
+      {...props}
+    >
+      <h2
+        id={titleId}
+        data-slot="dilekce-summary-title"
+        className="m-0 text-(length:--dk-text) leading-snug font-semibold text-(--dk-danger)"
+      >
+        {title ?? form.messages.summaryTitle}
+      </h2>
+      <ul
+        data-slot="dilekce-summary-list"
+        className="m-0 mt-(--dk-gap) flex list-none flex-col gap-1 p-0"
+      >
+        {state.items.map((item, index) => (
+          <li key={item.control.id || index} data-slot="dilekce-summary-item">
+            <a
+              data-slot="dilekce-summary-link"
+              href={item.control.id ? `#${item.control.id}` : "#"}
+              className="rounded-sm text-(length:--dk-text) leading-snug font-medium text-(--dk-danger) underline underline-offset-2 hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-solid focus-visible:outline-(--dk-focus)"
+              onClick={(event) => {
+                // Focus the control itself: the hash alone would only scroll.
+                event.preventDefault()
+                item.field.scrollIntoView({ block: "center" })
+                item.control.focus({ preventScroll: true })
+              }}
+            >
+              {[item.label, item.message].filter(Boolean).join(": ")}
+            </a>
+          </li>
+        ))}
+        {state.formLevel.map((message, index) => (
+          <li
+            key={`form-${index}`}
+            data-slot="dilekce-summary-item"
+            className="text-(length:--dk-text) leading-snug font-medium text-(--dk-danger)"
+          >
+            {message}
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
 
@@ -881,9 +1600,9 @@ function DilekceField({
   // Latest values for the handle and checks, which run outside a render. An
   // insertion effect runs before every layout effect, so a control's `sync`
   // (a layout effect of the child) already sees this render's rule.
-  const latest = React.useRef({ external, all, validate, native })
+  const latest = React.useRef({ external, all, validate, native, name })
   React.useInsertionEffect(() => {
-    latest.current = { external, all, validate, native }
+    latest.current = { external, all, validate, native, name }
   })
   React.useLayoutEffect(() => {
     setControlName(controlOf(fieldRef.current)?.name || undefined)
@@ -909,9 +1628,12 @@ function DilekceField({
   /**
    * `quiet` is a submit: the form announces how many fields need attention and
    * focus lands on the first, so the messages themselves aren't read out.
+   * `schemaRun` is the submit's one run of the form's schema; a check of the
+   * field alone starts its own.
    */
+  const runSchema = form?.runSchema
   const check = React.useCallback(
-    (quiet = false): string | null | Promise<string | null> => {
+    (quiet = false, schemaRun?: SchemaRun): string | null | Promise<string | null> => {
       const field = fieldRef.current
       if (!field) return null
       const { all, validate } = latest.current
@@ -924,38 +1646,47 @@ function DilekceField({
         setNative(null)
         return (newest.current = null)
       }
-      const found = readValidity(field, all)
-      if (found || !validate) {
-        if (quiet) spoken.current = found
+      const show = (message: string | null) => {
+        if (quiet) spoken.current = message
         setPending(false)
-        setNative(found)
-        return (newest.current = found)
+        setNative(message)
+        return message
       }
-      const data = new FormData(field.closest("form") ?? undefined)
-      const value = valueOf(field)
+      const found = readValidity(field, all)
+      if (found) return (newest.current = show(found))
+
       const asMessage = (result: ValidatorResult) =>
         typeof result === "string" && result !== "" ? result : null
+      // The last stage: the schema's issues for this field, once nothing earlier objected.
+      const bySchema = (own: string | null): string | null | Promise<string | null> => {
+        if (own) return show(own)
+        const outcome = schemaRun === undefined ? runSchema?.() : schemaRun
+        if (!outcome) return show(null)
+        const take = (done: SchemaOutcome) => {
+          const names = [latest.current.name, controlOf(field)?.name]
+          const key = names.find((n) => n != null && done.messages.has(n))
+          return show(key == null ? null : (done.messages.get(key) ?? null))
+        }
+        if (!isThenable<SchemaOutcome>(outcome)) return take(outcome)
+        // A submit shows "checking" on the form; a field checked alone shows it itself.
+        if (schemaRun === undefined) setPending(true)
+        return Promise.resolve(outcome).then((done) =>
+          token !== run.current ? newest.current : take(done),
+        )
+      }
 
+      if (!validate) return (newest.current = bySchema(null))
+      const data = new FormData(field.closest("form") ?? undefined)
+      const value = valueOf(field)
       const abort = new AbortController()
       controller.current = abort
       const result = validate(value, data, { signal: abort.signal })
-      if (!isThenable<ValidatorResult>(result)) {
-        if (quiet) spoken.current = asMessage(result)
-        setPending(false)
-        setNative(asMessage(result))
-        return (newest.current = asMessage(result))
-      }
+      if (!isThenable<ValidatorResult>(result))
+        return (newest.current = bySchema(asMessage(result)))
       setPending(true)
       // A superseded run answers with the newest outcome, never its own stale message.
       return (newest.current = Promise.resolve(result).then(
-        (resolved) => {
-          if (token !== run.current) return newest.current
-          const message = asMessage(resolved)
-          if (quiet) spoken.current = message
-          setPending(false)
-          setNative(message)
-          return message
-        },
+        (resolved) => (token !== run.current ? newest.current : bySchema(asMessage(resolved))),
         () => {
           // A rule that throws can't vouch for the value; it doesn't block it either.
           if (token !== run.current) return newest.current
@@ -964,7 +1695,7 @@ function DilekceField({
         },
       ))
     },
-    [cancel],
+    [cancel, runSchema],
   )
 
   const readCount = React.useCallback(() => {
@@ -992,13 +1723,27 @@ function DilekceField({
   React.useEffect(() => {
     if (!form) return
     return form.register({
-      validate: () => {
+      validate: (schemaRun) => {
         const field = fieldRef.current
         if (!field) return null
-        const result = check(true)
+        const result = check(true, schemaRun)
         if (allDisabled(field)) return null
-        const blocked = (message: string | null) =>
-          hasContent(latest.current.external) || message ? controlOf(field) : null
+        const blocked = (message: string | null): Failure | null => {
+          const { external } = latest.current
+          const control = controlOf(field)
+          if (!control || !(hasContent(external) || message)) return null
+          // The message on show: the app's own wins over the field's.
+          const shown = hasContent(external) ? external : message
+          return {
+            control,
+            field,
+            label: labelRef.current?.textContent?.trim() ?? "",
+            message:
+              typeof shown === "string"
+                ? shown
+                : (errorRef.current?.textContent?.trim() ?? String(shown ?? "")),
+          }
+        }
         return isThenable<string | null>(result)
           ? Promise.resolve(result).then(blocked)
           : blocked(result)
@@ -1013,8 +1758,22 @@ function DilekceField({
         // The browser restores values after the reset event.
         setTimeout(readCount)
       },
+      sync: readCount,
+      names: () => {
+        const field = fieldRef.current
+        if (!field || allDisabled(field)) return []
+        return [latest.current.name, controlOf(field)?.name].filter((n): n is string => !!n)
+      },
     })
   }, [form, check, cancel, readCount])
+
+  // A field that mounts after the form took its values picks up its defaults.
+  const applyDefaults = form?.applyDefaults
+  React.useLayoutEffect(() => {
+    if (!fieldRef.current) return
+    applyDefaults?.(fieldRef.current)
+    readCount()
+  }, [applyDefaults, readCount])
 
   // Gone: nothing the running check says may touch the field, and its rule is told to stop.
   React.useEffect(
@@ -1025,6 +1784,24 @@ function DilekceField({
     },
     [cancel],
   )
+
+  /*
+   * The error summary follows the field: a message that changes updates its
+   * line, a field that turns valid (or goes away) takes it off.
+   */
+  const reportField = form?.reportField
+  React.useLayoutEffect(() => {
+    const shown = invalid
+      ? typeof message === "string"
+        ? message
+        : (errorRef.current?.textContent?.trim() ?? "")
+      : null
+    reportField?.(fieldRef.current, shown)
+  }, [invalid, message, reportField])
+  React.useLayoutEffect(() => {
+    const field = fieldRef.current
+    return () => reportField?.(field, null)
+  }, [reportField])
 
   /*
    * A message that won't fit beside the label (within 60% of the cell) moves
@@ -1302,6 +2079,7 @@ function useControl(props: {
   "aria-describedby"?: string | undefined
   /** A controlled value; when it changes the field re-reads what depends on it. */
   value?: unknown
+  checked?: unknown
 }) {
   const field = useField()
   const sync = field?.sync
@@ -1316,6 +2094,8 @@ function useControl(props: {
     "aria-describedby":
       [field?.describedBy, props["aria-describedby"]].filter(Boolean).join(" ") || undefined,
     "aria-invalid": field?.invalid || undefined,
+    // The app sets this control's value: `defaultValues` leaves it alone.
+    "data-controlled": props.value !== undefined || props.checked !== undefined ? "" : undefined,
   }
 }
 
@@ -1481,6 +2261,8 @@ function DilekceSelect({
       })
       return [key]
     })
+    // `defaultValues` may have chosen an option before this ran.
+    read()
     select.form?.addEventListener("reset", onReset)
     select.addEventListener("focus", read)
     select.addEventListener("blur", read)
@@ -1853,11 +2635,16 @@ function DilekceRadioGroup({
       className={cn(CHOICES, className)}
       {...props}
     >
-      {options.map((option) => (
+      {options.map((option, index) => (
         <label key={option.value} className={CHOICE}>
           <input
             type="radio"
+            // The first radio is where the error summary's link lands.
+            id={index === 0 ? control.id : undefined}
             name={control.name ?? fallback}
+            // Named only to group the radios: not a value of the form.
+            data-anonymous={control.name ? undefined : ""}
+            data-controlled={control["data-controlled"]}
             value={option.value}
             required={required}
             disabled={disabled || option.disabled}
@@ -1918,12 +2705,15 @@ function DilekceCheckboxGroup({
           {field?.messages.valueMissing ?? dilekceMessages.en.valueMissing}
         </span>
       )}
-      {options.map((option) => (
+      {options.map((option, index) => (
         <label key={option.value} className={CHOICE}>
           <span className="relative grid place-items-center">
             <input
               type="checkbox"
+              // The first box is where the error summary's link lands.
+              id={index === 0 ? control.id : undefined}
               name={control.name}
+              data-controlled={control["data-controlled"]}
               value={option.value}
               disabled={disabled || option.disabled}
               // Valid on a checkbox, not on its group.
@@ -2004,5 +2794,6 @@ export {
   DilekceRow,
   DilekceSection,
   DilekceSelect,
+  DilekceSummary,
   DilekceTextarea,
 }

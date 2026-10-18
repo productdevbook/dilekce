@@ -1,5 +1,6 @@
 import * as React from "react"
 import { cn } from "cn"
+import { z } from "zod"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -13,6 +14,7 @@ import {
   DilekceRow,
   DilekceSection,
   DilekceSelect,
+  DilekceSummary,
   DilekceTextarea,
   dilekceMessages,
   type DilekceDensity,
@@ -50,6 +52,8 @@ const copy = {
     bounced: "This address bounced last time, check it",
     value: "Declared value",
     unsaved: "Unsaved changes",
+    houseNumber: "Add a house number",
+    noFood: "Same-day delivery doesn't take food",
   },
   tr: {
     sender: "Gönderici",
@@ -77,6 +81,8 @@ const copy = {
     bounced: "Bu adres geçen sefer geri döndü, kontrol edin",
     value: "Beyan edilen değer",
     unsaved: "Kaydedilmemiş değişiklikler",
+    houseNumber: "Bina numarasını ekleyin",
+    noFood: "Aynı gün teslimat gıda taşımaz",
   },
 }
 
@@ -94,6 +100,46 @@ export function App() {
   const [advance, setAdvance] = React.useState(true)
   const [dirty, setDirty] = React.useState(false)
   const t = copy[lang]
+
+  // The rules the browser can't express, as a Standard Schema (Zod here; Valibot
+  // and ArkType work the same). Values are strings, so numbers are coerced.
+  const booking = React.useMemo(
+    () =>
+      z
+        .looseObject({
+          street: z.string().regex(/\d/, t.houseNumber),
+          pieces: z.coerce.number(),
+          weight: z.coerce.number(),
+          value: z.union([z.literal("").transform(() => undefined), z.coerce.number()]),
+          service: z.string(),
+          contents: z.string(),
+        })
+        // No path: the issue belongs to the form, so only the summary shows it.
+        .refine((v) => !(v.service === "same-day" && v.contents === "food"), {
+          message: t.noFood,
+        }),
+    [t],
+  )
+  // The example fills the form by name; a reset goes back to these.
+  const defaults = React.useMemo(
+    () => ({
+      weight: 1.5,
+      pieces: 1,
+      service: "standard",
+      ...(sample
+        ? {
+            name: "Ada Lovelace",
+            email: "ada@analytical.engine",
+            confirm: "ada@analytical.engine",
+            city: "London",
+            value: 250,
+            contents: "documents",
+            extras: ["signature"],
+          }
+        : {}),
+    }),
+    [sample],
+  )
 
   return (
     <div className="mx-auto flex min-h-svh max-w-5xl flex-col gap-10 px-4 py-12 sm:px-6 sm:py-16">
@@ -162,14 +208,10 @@ export function App() {
             advance={advance}
             warnUnsaved
             onDirtyChange={setDirty}
-            onSubmit={(event) => {
-              event.preventDefault()
-              const data = new FormData(event.currentTarget)
-              const values: Record<string, unknown> = {}
-              for (const key of new Set(data.keys())) {
-                const all = data.getAll(key)
-                values[key] = all.length > 1 ? all : all[0]
-              }
+            schema={booking}
+            defaultValues={defaults}
+            onSubmit={(event) => event.preventDefault()}
+            onValidSubmit={(values) => {
               setSubmitted(values)
               // A pretend server: it remembers one address that bounced.
               if (String(values.email).endsWith("@bounce.test")) {
@@ -178,25 +220,17 @@ export function App() {
             }}
             onReset={() => setSubmitted(undefined)}
           >
+            <DilekceSummary />
             <DilekceSection legend={t.sender}>
               <DilekceRow>
                 <DilekceField name="name" label={t.name} span={2}>
-                  <DilekceInput
-                    required
-                    autoComplete="name"
-                    defaultValue={sample ? "Ada Lovelace" : undefined}
-                  />
+                  <DilekceInput required autoComplete="name" />
                 </DilekceField>
                 <DilekceField name="phone" label={t.phone}>
                   <DilekceInput type="tel" autoComplete="tel" />
                 </DilekceField>
                 <DilekceField name="email" label={t.email} span={2}>
-                  <DilekceInput
-                    type="email"
-                    required
-                    autoComplete="email"
-                    defaultValue={sample ? "ada@analytical.engine" : undefined}
-                  />
+                  <DilekceInput type="email" required autoComplete="email" />
                 </DilekceField>
                 <DilekceField
                   name="confirm"
@@ -204,12 +238,7 @@ export function App() {
                   span={2}
                   validate={(value, data) => value !== data.get("email") && t.mismatch}
                 >
-                  <DilekceInput
-                    type="email"
-                    required
-                    autoComplete="email"
-                    defaultValue={sample ? "ada@analytical.engine" : undefined}
-                  />
+                  <DilekceInput type="email" required autoComplete="email" />
                 </DilekceField>
               </DilekceRow>
               <DilekceRow>
@@ -217,10 +246,7 @@ export function App() {
                   <DilekceInput required autoComplete="street-address" />
                 </DilekceField>
                 <DilekceField name="city" label={t.city}>
-                  <DilekceInput
-                    autoComplete="address-level2"
-                    defaultValue={sample ? "London" : undefined}
-                  />
+                  <DilekceInput autoComplete="address-level2" />
                 </DilekceField>
                 <DilekceField
                   name="postcode"
@@ -245,31 +271,18 @@ export function App() {
             <DilekceSection legend={t.parcel}>
               <DilekceRow>
                 <DilekceField name="weight" label={t.weight}>
-                  <DilekceNumber
-                    min={0.1}
-                    max={30}
-                    step={0.1}
-                    required
-                    defaultValue={1.5}
-                    trailing="kg"
-                  />
+                  <DilekceNumber min={0.1} max={30} step={0.1} required trailing="kg" />
                 </DilekceField>
                 <DilekceField name="pieces" label={t.pieces}>
-                  <DilekceNumber min={1} max={20} defaultValue={1} />
+                  <DilekceNumber min={1} max={20} />
                 </DilekceField>
                 <DilekceField name="value" label={t.value}>
-                  <DilekceNumber
-                    min={0}
-                    step={10}
-                    defaultValue={sample ? 250 : undefined}
-                    leading="$"
-                  />
+                  <DilekceNumber min={0} step={10} leading="$" />
                 </DilekceField>
                 <DilekceField name="contents" label={t.contents} span={2}>
                   <DilekceSelect
                     required
                     placeholder={t.select}
-                    defaultValue={sample ? "documents" : undefined}
                     options={[
                       { value: "documents", label: "Documents" },
                       { value: "clothing", label: "Clothing" },
@@ -287,7 +300,6 @@ export function App() {
                 <DilekceField name="service" label={t.service} span={2}>
                   <DilekceRadioGroup
                     required
-                    defaultValue="standard"
                     options={[
                       { value: "standard", label: "Standard" },
                       { value: "express", label: "Express" },
@@ -297,7 +309,6 @@ export function App() {
                 </DilekceField>
                 <DilekceField name="extras" label={t.extras} span={2}>
                   <DilekceCheckboxGroup
-                    defaultValue={sample ? ["signature"] : []}
                     options={[
                       { value: "insurance", label: "Insurance" },
                       { value: "signature", label: "Signature" },
@@ -325,9 +336,9 @@ export function App() {
         <p className="text-sm text-muted-foreground">
           Try postcode <code className="font-mono text-foreground">00000</code> for an async check,
           an email ending in <code className="font-mono text-foreground">@bounce.test</code> for a
-          server error, Enter to move cell to cell, filled mode to copy values, a drag across the
-          weight label to scrub it, or a narrower width to watch rows wrap without a single
-          breakpoint.
+          server error, same-day delivery of food for a form-level issue from the schema, Enter to
+          move cell to cell, filled mode to copy values, a drag across the weight label to scrub it,
+          or a narrower width to watch rows wrap without a single breakpoint.
         </p>
 
         {submitted && (

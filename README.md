@@ -102,19 +102,20 @@ its own short message and focus goes to the first one that needs attention.
 
 ## Components
 
-| Component              | Renders                   | Notes                                                                                                          |
-| ---------------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `Dilekce`              | `<form>`                  | `mode`, `density`, `focus`, `messages`, `errors`, `advance`, `warnUnsaved`, `copyable`                         |
-| `DilekceSection`       | `<fieldset>` + `<legend>` | `legend` becomes a full-width band                                                                             |
-| `DilekceRow`           | `<div>`                   | Cells share it by `span`                                                                                       |
-| `DilekceField`         | One cell                  | `label`, `name`, `span`, `description`, `error`, `messages`, `validate`                                        |
-| `DilekceInput`         | `<input>`                 | Any `type`; `leading` and `trailing` affixes                                                                   |
-| `DilekceTextarea`      | `<textarea>`              | Grows with its text where `field-sizing` is supported                                                          |
-| `DilekceSelect`        | `<select>`                | `options`, `placeholder`                                                                                       |
-| `DilekceNumber`        | `<input type="number">`   | −/+ steppers that repeat while held; drag across the label to scrub; `leading`, `trailing`                     |
-| `DilekceRadioGroup`    | Native radios             | `options`, `value`, `defaultValue`, `onValueChange`                                                            |
-| `DilekceCheckboxGroup` | Native checkboxes         | Same, with `string[]`; `required` means at least one; uncontrolled unless you pass `value`, so reset clears it |
-| `DilekceActions`       | `<div>`                   | The form's last row. Put your shadcn `<Button>`s here, primary last                                            |
+| Component              | Renders                   | Notes                                                                                                             |
+| ---------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `Dilekce`              | `<form>`                  | `mode`, `density`, `focus`, `messages`, `errors`, `schema`, `defaultValues`, `advance`, `warnUnsaved`, `copyable` |
+| `DilekceSummary`       | `<div>`                   | The error summary: links to the invalid fields after a stopped submit                                             |
+| `DilekceSection`       | `<fieldset>` + `<legend>` | `legend` becomes a full-width band                                                                                |
+| `DilekceRow`           | `<div>`                   | Cells share it by `span`                                                                                          |
+| `DilekceField`         | One cell                  | `label`, `name`, `span`, `description`, `error`, `messages`, `validate`                                           |
+| `DilekceInput`         | `<input>`                 | Any `type`; `leading` and `trailing` affixes                                                                      |
+| `DilekceTextarea`      | `<textarea>`              | Grows with its text where `field-sizing` is supported                                                             |
+| `DilekceSelect`        | `<select>`                | `options`, `placeholder`                                                                                          |
+| `DilekceNumber`        | `<input type="number">`   | −/+ steppers that repeat while held; drag across the label to scrub; `leading`, `trailing`                        |
+| `DilekceRadioGroup`    | Native radios             | `options`, `value`, `defaultValue`, `onValueChange`                                                               |
+| `DilekceCheckboxGroup` | Native checkboxes         | Same, with `string[]`; `required` means at least one; uncontrolled unless you pass `value`, so reset clears it    |
+| `DilekceActions`       | `<div>`                   | The form's last row. Put your shadcn `<Button>`s here, primary last                                               |
 
 ## Validation
 
@@ -143,7 +144,7 @@ import { dilekceMessages } from "@/components/ui/dilekce"
 
 Beyond the validity keys (`DilekceMessageKey` is the full set), `messages`
 also holds `pending`, `invalidOne`, `invalidMany` (write `{count}` in it),
-`copy` and `copied`.
+`copy`, `copied` and `summaryTitle`.
 
 ### Your own rules
 
@@ -191,11 +192,115 @@ Pass it on to cancel the work:
 
 When a submit is stopped, focus goes to the first invalid field and a polite
 `role="status"` line announces how many need attention ("1 field needs
-attention", "3 fields need attention"). `onInvalidSubmit` gets their names:
+attention", "3 fields need attention"). `onInvalidSubmit` gets the invalid
+fields, in document order:
 
 ```tsx
-<Dilekce onInvalidSubmit={(names) => track("form_invalid", { names })}>…</Dilekce>
+<Dilekce
+  onInvalidSubmit={(fields) =>
+    // [{ name: "email", label: "Email", message: "Required", element: <input> }]
+    track("form_invalid", { names: fields.map((field) => field.name) })
+  }
+>
+  …
+</Dilekce>
 ```
+
+### Error summary
+
+Put `DilekceSummary` anywhere in the form, usually first. It renders nothing
+until a submit is stopped, then a heading ("There is a problem", the
+`summaryTitle` message, or your `title`) and a link per invalid field in
+document order, "Label: message", like GOV.UK's error summary. Activating a
+link focuses the control (the first radio or checkbox of a group) and scrolls
+it into view. Focus moves to the summary instead of the first field, so it is
+the first thing a screen reader reads; there is no `role="alert"`.
+
+```tsx
+<Dilekce>
+  <DilekceSummary />…
+</Dilekce>
+```
+
+Lines go as their fields become valid, and the summary hides when none is
+left, on a reset and after a valid submit. It is a full-width cell in the
+grid with a destructive accent, and hidden in filled mode and in print. Style
+the parts through `data-slot` (`dilekce-summary`, `dilekce-summary-title`,
+`dilekce-summary-list`, `dilekce-summary-link`).
+
+### Schema (Zod, Valibot, ArkType)
+
+`schema` takes any [Standard Schema](https://standardschema.dev). dilekçe
+declares the interface itself, so there is no dependency on any of them. The
+schema runs once the browser's constraints and the field's own `validate`
+pass: on submit for every field, on blur and live for the field being edited
+(the whole schema runs, that field's issues are shown).
+
+```tsx
+import { z } from "zod"
+
+const Booking = z.object({
+  name: z.string().min(2, "Too short"),
+  weight: z.coerce.number().min(0.1, "Too light"), // values are strings: coerce
+  extras: z.array(z.string()),
+  passengers: z.array(z.object({ name: z.string().min(1, "Required") })),
+})
+
+<Dilekce
+  schema={Booking}
+  onValidSubmit={(booking) => save(booking)} // typed as z.output<typeof Booking>
+>
+  <DilekceSummary />
+  <DilekceField name="name" label="Name"><DilekceInput /></DilekceField>
+  <DilekceField name="weight" label="Weight"><DilekceNumber /></DilekceField>
+  <DilekceField name="extras" label="Extras"><DilekceCheckboxGroup options={extras} /></DilekceField>
+  <DilekceField name="passengers.0.name" label="Passenger"><DilekceInput /></DilekceField>
+</Dilekce>
+```
+
+- **The values** are read from the form by name: a string each, a `string[]`
+  for several checkboxes of one name, a checkbox group and a multiple select
+  (empty when none is ticked). Numbers stay strings, so use `z.coerce`. A
+  dotted name nests: `passengers.0.name` becomes `{ passengers: [{ name }] }`.
+  Disabled controls, unchecked single checkboxes and files are left out.
+- **Issues** go to the field whose name equals the issue's `path` joined with
+  `.` (`{ key }` segments work). An issue no enabled field answers for, such
+  as a `refine` on the whole object, is a form-level line in the summary and
+  reaches `onInvalidSubmit` with an empty `name` and `label`. Without a
+  `DilekceSummary` it only reaches `onInvalidSubmit`.
+- An async schema works like an async `validate`: the field shows `pending`,
+  the submit is held, and the newest run wins. A schema that throws doesn't
+  block, like a rule that throws.
+- `onValidSubmit(value, event)` runs after `onSubmit` when the submit goes
+  through, with the schema's parsed output (or, without a schema, the values
+  object). `onSubmit` works as before.
+
+### Default values
+
+`defaultValues` fills the form by name, for a saved draft or data you loaded.
+Keys are field names, dotted names work, and so do nested objects and arrays,
+which flatten to dotted names.
+
+```tsx
+<Dilekce
+  defaultValues={{
+    name: "Ada",
+    extras: ["signature"], // a checkbox group (or multiple select)
+    agree: true, // a single checkbox
+    passengers: [{ name: "Ada" }], // passengers.0.name
+  }}
+>
+```
+
+The values are written to the controls' DOM defaults before the first paint,
+so the form isn't dirty and a reset restores them. `null` clears a field. They
+win over a control's own `defaultValue`, but a control you control (`value`,
+`checked`) keeps its value. A field that mounts later picks its values up too.
+When a `defaultValues` object with other contents arrives, it is applied again
+and the form resets to it (like react-hook-form's `reset(values)`), clearing
+dirty and the messages; your `onReset` isn't called for that. An object with
+the same contents, such as an inline literal re-created on every render,
+changes nothing.
 
 ### Server errors
 
@@ -214,7 +319,7 @@ const [errors, setErrors] = useState<DilekceErrors>()
 }}>
 ```
 
-### react-hook-form, TanStack Form, Zod
+### react-hook-form, TanStack Form
 
 Give the field its message with `error`. While it's set the field is invalid,
 `aria-invalid` is on the control, and the message is in its
@@ -314,7 +419,7 @@ its bottom. Every part carries a `data-slot` (`dilekce-field`,
 - Field messages (on blur, live, "Checking…", "Copied", errors you pass in)
   are read through one polite live region per form, with the field's label,
   once per change. A failed submit says how many fields need attention and
-  focuses the first.
+  focuses the first, or the error summary when the form has one.
 - Affixes (`kg`, `$`) are part of the control's description. The −/+ steppers
   are named with the field ("Decrease Weight"); the arrow keys step the input.
 - Windows High Contrast (`forced-colors`): cells get real borders, the focused

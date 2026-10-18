@@ -1,8 +1,9 @@
 import * as React from "react"
 import { flushSync } from "react-dom"
-import { afterEach, describe, expect, test, vi } from "vitest"
+import { afterEach, describe, expect, expectTypeOf, test, vi } from "vitest"
 import { cdp, userEvent } from "vitest/browser"
 import { cleanup, render } from "vitest-browser-react"
+import { z } from "zod"
 
 import "../src/index.css"
 import {
@@ -16,10 +17,13 @@ import {
   DilekceRow,
   DilekceSection,
   DilekceSelect,
+  DilekceSummary,
   DilekceTextarea,
   dilekceMessages,
   type DilekceErrors,
+  type DilekceInvalidField,
   type DilekceMode,
+  type StandardSchemaV1,
 } from "../registry/dilekce/dilekce"
 
 afterEach(() => cleanup())
@@ -1114,7 +1118,13 @@ describe("form behaviour", () => {
     )
     await screen.getByRole("button", { name: "Save" }).click()
     expect(screen.getByRole("status").element().textContent).toBe("2 alan düzeltilmeli")
-    expect(onInvalidSubmit).toHaveBeenCalledWith(["a", "b"])
+    const fields: DilekceInvalidField[] = onInvalidSubmit.mock.calls[0]![0]
+    expect(fields.map(({ name, label, message }) => ({ name, label, message }))).toEqual([
+      { name: "a", label: "A", message: "Zorunlu" },
+      { name: "b", label: "B", message: "Zorunlu" },
+    ])
+    expect(fields[0]!.element).toBe($("[name=a]"))
+    expect(fields[1]!.element).toBe($("[name=b]"))
   })
 })
 
@@ -2188,5 +2198,829 @@ describe("async checks that go wrong", () => {
     $<HTMLFormElement>("form").requestSubmit()
     await sleep(20)
     expect(validate).toHaveBeenCalledWith("y", expect.any(FormData), expect.anything())
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/*                               Error summary                                */
+/* -------------------------------------------------------------------------- */
+
+describe("error summary", () => {
+  const kinds = [
+    { value: "a", label: "Alpha" },
+    { value: "b", label: "Beta" },
+  ]
+  const SUMMARY = "[data-slot=dilekce-summary]"
+  const links = () => [...document.querySelectorAll<HTMLAnchorElement>(`${SUMMARY} a`)]
+
+  function Summarised({
+    onInvalidSubmit,
+    mode,
+    messages,
+    title,
+    spacer = false,
+  }: {
+    onInvalidSubmit?: (fields: DilekceInvalidField[]) => void
+    mode?: DilekceMode
+    messages?: typeof dilekceMessages.tr
+    title?: React.ReactNode
+    spacer?: boolean
+  }) {
+    return (
+      <Dilekce
+        mode={mode}
+        messages={messages}
+        onInvalidSubmit={onInvalidSubmit}
+        onSubmit={(event) => event.preventDefault()}
+      >
+        <DilekceSummary title={title} />
+        <DilekceRow>
+          <DilekceField name="name" label="Full name">
+            <DilekceInput required />
+          </DilekceField>
+          <DilekceField name="email" label="Email">
+            <DilekceInput type="email" required />
+          </DilekceField>
+        </DilekceRow>
+        {spacer && <div style={{ height: 3000 }} />}
+        <DilekceField name="kind" label="Kind">
+          <DilekceRadioGroup name="kind" required options={kinds} />
+        </DilekceField>
+        <DilekceActions>
+          <button type="submit">Save</button>
+          <button type="reset">Reset</button>
+        </DilekceActions>
+      </Dilekce>
+    )
+  }
+
+  test("renders nothing until a submit is stopped", async () => {
+    await render(<Summarised />)
+    expect(document.querySelector(SUMMARY)).toBeNull()
+  })
+
+  test("a stopped submit lists a link per invalid field and focuses the summary", async () => {
+    const screen = await render(<Summarised />)
+    await screen.getByRole("button", { name: "Save" }).click()
+    const summary = $(SUMMARY)
+    expect(document.activeElement).toBe(summary)
+    expect(summary.getAttribute("tabindex")).toBe("-1")
+    expect(summary.getAttribute("role")).not.toBe("alert")
+    expect(document.getElementById(summary.getAttribute("aria-labelledby")!)?.textContent).toBe(
+      "There is a problem",
+    )
+    expect(links().map((link) => link.textContent)).toEqual([
+      "Full name: Required",
+      "Email: Required",
+      "Kind: Required",
+    ])
+    // Each link points at its control; a radio group at its first radio.
+    expect(links().map((link) => link.getAttribute("href"))).toEqual([
+      `#${$("[name=name]").id}`,
+      `#${$("[name=email]").id}`,
+      `#${$("[name=kind]").id}`,
+    ])
+    expect(document.getElementById($("[name=kind]").id)).toBe($("[name=kind]"))
+    // The cells still show their own message; the form still counts.
+    expect(errorOf("name")).toBe("Required")
+    expect(screen.getByRole("status").element().textContent).toBe("3 fields need attention")
+  })
+
+  test("without a summary the first invalid field is focused, as before", async () => {
+    const screen = await render(<Basic />)
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect(document.activeElement).toBe($("[name=name]"))
+  })
+
+  test("a link focuses its control and scrolls it into view instead of changing the hash", async () => {
+    const screen = await render(<Summarised spacer />)
+    await screen.getByRole("button", { name: "Save" }).click()
+    const before = location.hash
+    const link = links()[2]!
+    link.click()
+    expect(document.activeElement).toBe($("[name=kind]"))
+    expect(location.hash).toBe(before)
+    const box = $("[name=kind]").getBoundingClientRect()
+    expect(box.top).toBeGreaterThanOrEqual(0)
+    expect(box.bottom).toBeLessThanOrEqual(window.innerHeight)
+  })
+
+  test("a line goes when its field turns valid; the summary hides when none is left", async () => {
+    const screen = await render(<Summarised />)
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect(links()).toHaveLength(3)
+    await userEvent.type($("[name=name]"), "Ada")
+    await expect
+      .poll(() => links().map((link) => link.textContent))
+      .toEqual(["Email: Required", "Kind: Required"])
+    // The message follows the field live.
+    await userEvent.type($("[name=email]"), "nope")
+    await expect.poll(() => links()[0]?.textContent).toBe("Email: Check format")
+    await userEvent.type($("[name=email]"), "@x.org")
+    await userEvent.click(document.querySelectorAll<HTMLElement>("[name=kind]")[1]!)
+    await expect.poll(() => document.querySelector(SUMMARY)).toBeNull()
+  })
+
+  test("a reset hides it, and a valid submit too", async () => {
+    const screen = await render(<Summarised />)
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect(document.querySelector(SUMMARY)).not.toBeNull()
+    await screen.getByRole("button", { name: "Reset" }).click()
+    await expect.poll(() => document.querySelector(SUMMARY)).toBeNull()
+
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect(document.querySelector(SUMMARY)).not.toBeNull()
+    await userEvent.type($("[name=name]"), "Ada")
+    await userEvent.type($("[name=email]"), "a@b.co")
+    await userEvent.click($("[name=kind]"))
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect(document.querySelector(SUMMARY)).toBeNull()
+  })
+
+  test("a second stopped submit takes focus again", async () => {
+    const screen = await render(<Summarised />)
+    await screen.getByRole("button", { name: "Save" }).click()
+    $<HTMLInputElement>("[name=name]").focus()
+    $<HTMLFormElement>("form").requestSubmit()
+    await expect.poll(() => document.activeElement).toBe($(SUMMARY))
+  })
+
+  test("the heading is a message", async () => {
+    const screen = await render(<Summarised messages={dilekceMessages.tr} />)
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect($("[data-slot=dilekce-summary-title]").textContent).toBe("Bir sorun var")
+  })
+
+  test("the title prop replaces the heading", async () => {
+    const screen = await render(<Summarised title="Fix these" />)
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect($("[data-slot=dilekce-summary-title]").textContent).toBe("Fix these")
+  })
+
+  test("onInvalidSubmit gets name, label, message and the control", async () => {
+    const onInvalidSubmit = vi.fn()
+    const screen = await render(<Summarised onInvalidSubmit={onInvalidSubmit} />)
+    await screen.getByRole("button", { name: "Save" }).click()
+    const fields: DilekceInvalidField[] = onInvalidSubmit.mock.calls[0]![0]
+    expect(fields.map((f) => [f.name, f.label, f.message])).toEqual([
+      ["name", "Full name", "Required"],
+      ["email", "Email", "Required"],
+      ["kind", "Kind", "Required"],
+    ])
+    expect(fields[0]!.element).toBe($("[name=name]"))
+  })
+
+  test("it is hidden in filled mode and in print", async () => {
+    const screen = await render(<Summarised />)
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect(getComputedStyle($(SUMMARY)).display).not.toBe("none")
+    await cdp().send("Emulation.setEmulatedMedia", { media: "print" })
+    expect(getComputedStyle($(SUMMARY)).display).toBe("none")
+    await emulate([])
+    await screen.rerender(<Summarised mode="filled" />)
+    expect(getComputedStyle($(SUMMARY)).display).toBe("none")
+  })
+
+  test("it spans the grid with a destructive accent", async () => {
+    const screen = await render(<Summarised />)
+    await screen.getByRole("button", { name: "Save" }).click()
+    const summary = $(SUMMARY)
+    expect(summary.getBoundingClientRect().width).toBe($("form").clientWidth)
+    expect(style(summary).borderLeftWidth).toBe("4px")
+  })
+
+  for (const theme of ["light", "dark"] as const) {
+    test(`${theme}: heading and links keep 4.5:1`, async () => {
+      document.documentElement.classList.toggle("dark", theme === "dark")
+      const screen = await render(<Summarised />)
+      await screen.getByRole("button", { name: "Save" }).click()
+      const summary = $(SUMMARY)
+      const background = style(summary).backgroundColor
+      expect(rgba(background)[3]).toBe(255)
+      for (const text of [$("[data-slot=dilekce-summary-title]"), ...links()]) {
+        expect(
+          ratio(style(text).color, background),
+          `${theme} ${text.textContent}`,
+        ).toBeGreaterThanOrEqual(4.5)
+      }
+    })
+  }
+})
+
+/* -------------------------------------------------------------------------- */
+/*                               Standard Schema                              */
+/* -------------------------------------------------------------------------- */
+
+describe("schema", () => {
+  const prevent = (event: React.FormEvent) => event.preventDefault()
+  const save = (name: string) => `${name}`
+
+  const Signup = z.object({
+    name: z.string().min(3, "At least 3 letters"),
+    age: z.coerce.number().min(18, "Adults only"),
+  })
+
+  function Form({
+    schema = Signup,
+    onValidSubmit,
+    onInvalidSubmit,
+    onSubmit = prevent,
+  }: {
+    schema?: StandardSchemaV1
+    onValidSubmit?: (value: unknown, event: React.FormEvent<HTMLFormElement>) => void
+    onInvalidSubmit?: (fields: DilekceInvalidField[]) => void
+    onSubmit?: (event: React.FormEvent<HTMLFormElement>) => void
+  }) {
+    return (
+      <Dilekce
+        schema={schema}
+        onValidSubmit={onValidSubmit}
+        onInvalidSubmit={onInvalidSubmit}
+        onSubmit={onSubmit}
+      >
+        <DilekceSummary />
+        <DilekceRow>
+          <DilekceField name="name" label="Name">
+            <DilekceInput />
+          </DilekceField>
+          <DilekceField name="age" label="Age">
+            <DilekceNumber />
+          </DilekceField>
+        </DilekceRow>
+        <button type="submit">{save("Go")}</button>
+      </Dilekce>
+    )
+  }
+
+  test("issues land on their fields on submit, in the summary and in onInvalidSubmit", async () => {
+    const onValidSubmit = vi.fn()
+    const onInvalidSubmit = vi.fn()
+    const screen = await render(
+      <Form onValidSubmit={onValidSubmit} onInvalidSubmit={onInvalidSubmit} />,
+    )
+    await userEvent.type($("[name=name]"), "ab")
+    await userEvent.type($("[name=age]"), "5")
+    await screen.getByRole("button", { name: "Go" }).click()
+    expect(errorOf("name")).toBe("At least 3 letters")
+    expect(errorOf("age")).toBe("Adults only")
+    expect(onValidSubmit).not.toHaveBeenCalled()
+    expect(
+      [...document.querySelectorAll("[data-slot=dilekce-summary] a")].map((a) => a.textContent),
+    ).toEqual(["Name: At least 3 letters", "Age: Adults only"])
+    expect(onInvalidSubmit.mock.calls[0]![0].map((f: DilekceInvalidField) => f.name)).toEqual([
+      "name",
+      "age",
+    ])
+  })
+
+  test("the schema runs after constraints and the field's own rule", async () => {
+    const screen = await render(
+      <Dilekce schema={Signup} onSubmit={prevent}>
+        <DilekceField name="name" label="Name">
+          <DilekceInput required />
+        </DilekceField>
+        <DilekceField name="age" label="Age" validate={(v) => v === "7" && "Not seven"}>
+          <DilekceNumber />
+        </DilekceField>
+        <button type="submit">Go</button>
+      </Dilekce>,
+    )
+    await userEvent.type($("[name=age]"), "7")
+    await screen.getByRole("button", { name: "Go" }).click()
+    // Name is empty: the browser's "Required", not the schema's "At least 3 letters".
+    expect(errorOf("name")).toBe("Required")
+    // The field's rule beats the schema's "Adults only".
+    expect(errorOf("age")).toBe("Not seven")
+  })
+
+  test("on blur only that field's issues show, and they follow typing live", async () => {
+    await render(<Form />)
+    await userEvent.type($("[name=name]"), "ab")
+    await userEvent.tab()
+    expect(errorOf("name")).toBe("At least 3 letters")
+    // The age field was never touched: the schema's issue for it stays hidden.
+    expect(errorOf("age")).toBeNull()
+    await userEvent.type($("[name=name]"), "c")
+    await expect.poll(() => errorOf("name")).toBeNull()
+  })
+
+  test("a valid submit gets the schema's parsed output; onSubmit still runs", async () => {
+    const onValidSubmit = vi.fn()
+    const onSubmit = vi.fn(prevent)
+    const screen = await render(<Form onValidSubmit={onValidSubmit} onSubmit={onSubmit} />)
+    await userEvent.type($("[name=name]"), "Ada")
+    await userEvent.type($("[name=age]"), "36")
+    await screen.getByRole("button", { name: "Go" }).click()
+    expect(onValidSubmit).toHaveBeenCalledTimes(1)
+    expect(onValidSubmit.mock.calls[0]![0]).toEqual({ name: "Ada", age: 36 })
+    expect(onValidSubmit.mock.calls[0]![1].type).toBe("submit")
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+  })
+
+  test("without a schema onValidSubmit gets the values", async () => {
+    const onValidSubmit = vi.fn()
+    const screen = await render(
+      <Dilekce onSubmit={prevent} onValidSubmit={onValidSubmit}>
+        <DilekceField name="name" label="Name">
+          <DilekceInput defaultValue="Ada" />
+        </DilekceField>
+        <DilekceField name="bio" label="Bio">
+          <DilekceTextarea defaultValue="Hi" />
+        </DilekceField>
+        <DilekceField name="age" label="Age">
+          <DilekceNumber defaultValue={36} />
+        </DilekceField>
+        <DilekceField name="size" label="Size">
+          <DilekceSelect options={kindOptions} defaultValue="b" />
+        </DilekceField>
+        <DilekceField name="kind" label="Kind">
+          <DilekceRadioGroup options={kindOptions} defaultValue="a" />
+        </DilekceField>
+        <DilekceField name="tags" label="Tags">
+          <DilekceCheckboxGroup options={kindOptions} defaultValue={["a", "b"]} />
+        </DilekceField>
+        <DilekceField name="none" label="None">
+          <DilekceCheckboxGroup options={kindOptions} />
+        </DilekceField>
+        <DilekceField name="solo" label="Solo">
+          <DilekceCheckboxGroup options={[{ value: "yes", label: "Yes" }]} defaultValue={["yes"]} />
+        </DilekceField>
+        <input type="checkbox" name="agree" value="on" defaultChecked />
+        <input type="checkbox" name="off" value="on" />
+        <input type="checkbox" name="pair" value="x" defaultChecked />
+        <input type="checkbox" name="pair" value="y" />
+        <input name="gone" defaultValue="x" disabled />
+        <DilekceField name="passengers.0.name" label="P0">
+          <DilekceInput defaultValue="Ada" />
+        </DilekceField>
+        <DilekceField name="passengers.1.name" label="P1">
+          <DilekceInput defaultValue="Grace" />
+        </DilekceField>
+        <DilekceField name="address.city" label="City">
+          <DilekceInput defaultValue="Ankara" />
+        </DilekceField>
+        <button type="submit">Go</button>
+      </Dilekce>,
+    )
+    await screen.getByRole("button", { name: "Go" }).click()
+    expect(onValidSubmit.mock.calls[0]![0]).toEqual({
+      name: "Ada",
+      bio: "Hi",
+      age: "36",
+      size: "b",
+      kind: "a",
+      tags: ["a", "b"],
+      none: [],
+      solo: ["yes"],
+      agree: "on",
+      pair: ["x"],
+      passengers: [{ name: "Ada" }, { name: "Grace" }],
+      address: { city: "Ankara" },
+    })
+  })
+
+  test("a path of { key } segments and indexes finds a dotted name", async () => {
+    const schema: StandardSchemaV1 = {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: () => ({
+          issues: [{ message: "Nope", path: [{ key: "passengers" }, 0, { key: "name" }] }],
+        }),
+      },
+    }
+    const screen = await render(
+      <Dilekce schema={schema} onSubmit={prevent}>
+        <DilekceField name="passengers.0.name" label="Passenger">
+          <DilekceInput />
+        </DilekceField>
+        <button type="submit">Go</button>
+      </Dilekce>,
+    )
+    await screen.getByRole("button", { name: "Go" }).click()
+    expect(errorOf("passengers.0.name")).toBe("Nope")
+  })
+
+  test("an issue no field answers for becomes a form-level line", async () => {
+    const schema = z
+      .object({ name: z.string(), age: z.coerce.number() })
+      .refine((v) => v.name !== "root", { message: "Not root" })
+    const onInvalidSubmit = vi.fn()
+    const onValidSubmit = vi.fn()
+    const screen = await render(
+      <Form schema={schema} onInvalidSubmit={onInvalidSubmit} onValidSubmit={onValidSubmit} />,
+    )
+    await userEvent.type($("[name=name]"), "root")
+    await userEvent.type($("[name=age]"), "20")
+    await screen.getByRole("button", { name: "Go" }).click()
+    expect(onValidSubmit).not.toHaveBeenCalled()
+    const summary = $("[data-slot=dilekce-summary]")
+    expect(document.activeElement).toBe(summary)
+    expect([...summary.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["Not root"])
+    expect(summary.querySelector("a")).toBeNull()
+    const fields: DilekceInvalidField[] = onInvalidSubmit.mock.calls[0]![0]
+    expect(fields).toHaveLength(1)
+    expect(fields[0]).toMatchObject({ name: "", label: "", message: "Not root" })
+    expect(fields[0]!.element).toBe($("form"))
+    // Fixing it from a field clears the line.
+    await userEvent.clear($("[name=name]"))
+    await userEvent.type($("[name=name]"), "ada")
+    await userEvent.tab()
+    await expect.poll(() => document.querySelector("[data-slot=dilekce-summary]")).toBeNull()
+  })
+
+  test("a checkbox group's issue lands on the group", async () => {
+    const onValidSubmit = vi.fn()
+    const screen = await render(
+      <Dilekce
+        schema={z.object({ tags: z.array(z.string()).min(1, "Pick one") })}
+        onSubmit={prevent}
+        onValidSubmit={onValidSubmit}
+      >
+        <DilekceField name="tags" label="Tags">
+          <DilekceCheckboxGroup options={kindOptions} />
+        </DilekceField>
+        <button type="submit">Go</button>
+      </Dilekce>,
+    )
+    await screen.getByRole("button", { name: "Go" }).click()
+    expect(errorOf("tags")).toBe("Pick one")
+    await userEvent.click($("[name=tags]"))
+    await screen.getByRole("button", { name: "Go" }).click()
+    expect(onValidSubmit.mock.calls[0]![0]).toEqual({ tags: ["a"] })
+  })
+
+  test("a field that is disabled isn't answered for: its issue is form-level", async () => {
+    const onInvalidSubmit = vi.fn()
+    const screen = await render(
+      <Dilekce schema={Signup} onSubmit={prevent} onInvalidSubmit={onInvalidSubmit}>
+        <DilekceField name="name" label="Name">
+          <DilekceInput defaultValue="Ada" />
+        </DilekceField>
+        <DilekceField name="age" label="Age">
+          <DilekceNumber disabled />
+        </DilekceField>
+        <button type="submit">Go</button>
+      </Dilekce>,
+    )
+    await screen.getByRole("button", { name: "Go" }).click()
+    expect(onInvalidSubmit.mock.calls[0]![0].map((f: DilekceInvalidField) => f.name)).toEqual([""])
+  })
+
+  test("an async schema holds the submit, and the newest answer wins", async () => {
+    const runs: Array<{ value: unknown; resolve: (r: StandardSchemaV1.Result<unknown>) => void }> =
+      []
+    const schema: StandardSchemaV1 = {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: (value) =>
+          new Promise((resolve) => {
+            runs.push({ value, resolve })
+          }),
+      },
+    }
+    const onValidSubmit = vi.fn()
+    await render(
+      <Dilekce schema={schema} onSubmit={prevent} onValidSubmit={onValidSubmit}>
+        <DilekceField name="name" label="Name">
+          <DilekceInput />
+        </DilekceField>
+        <button type="submit">Go</button>
+      </Dilekce>,
+    )
+    // Blur alone: the field is pending while the schema runs.
+    await userEvent.type($("[name=name]"), "a")
+    await userEvent.tab()
+    await expect.poll(() => runs.length).toBe(1)
+    expect(fieldOf("name").dataset.pending).toBe("true")
+    // A newer edit supersedes: the stale answer is ignored.
+    await userEvent.type($("[name=name]"), "b")
+    await userEvent.tab()
+    await expect.poll(() => runs.length).toBe(2)
+    runs[1]!.resolve({ value: { name: "ab" } })
+    await expect.poll(() => fieldOf("name").dataset.pending).toBeUndefined()
+    runs[0]!.resolve({ issues: [{ message: "Stale", path: ["name"] }] })
+    await sleep(20)
+    expect(errorOf("name")).toBeNull()
+    // Submit: held while the schema runs, then goes through with its output.
+    $<HTMLFormElement>("form").requestSubmit()
+    await expect.poll(() => runs.length).toBe(3)
+    expect($("form").dataset.checking).toBe("true")
+    expect(onValidSubmit).not.toHaveBeenCalled()
+    runs[2]!.resolve({ value: { name: "parsed" } })
+    await expect.poll(() => onValidSubmit.mock.calls.length).toBe(1)
+    expect(onValidSubmit.mock.calls[0]![0]).toEqual({ name: "parsed" })
+    expect($("form").dataset.checking).toBeUndefined()
+  })
+
+  test("an async schema's issues fail the held submit", async () => {
+    const schema: StandardSchemaV1 = {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: async () => ({ issues: [{ message: "Taken", path: ["name"] }] }),
+      },
+    }
+    const onValidSubmit = vi.fn()
+    const onInvalidSubmit = vi.fn()
+    await render(
+      <Dilekce
+        schema={schema}
+        onSubmit={prevent}
+        onValidSubmit={onValidSubmit}
+        onInvalidSubmit={onInvalidSubmit}
+      >
+        <DilekceField name="name" label="Name">
+          <DilekceInput />
+        </DilekceField>
+        <button type="submit">Go</button>
+      </Dilekce>,
+    )
+    $<HTMLFormElement>("form").requestSubmit()
+    await expect.poll(() => errorOf("name")).toBe("Taken")
+    expect(onValidSubmit).not.toHaveBeenCalled()
+    expect(onInvalidSubmit).toHaveBeenCalledTimes(1)
+    expect(document.activeElement).toBe($("[name=name]"))
+  })
+
+  test("a schema that throws doesn't block the form", async () => {
+    const schema: StandardSchemaV1 = {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: () => {
+          throw new Error("boom")
+        },
+      },
+    }
+    const onValidSubmit = vi.fn()
+    const screen = await render(
+      <Dilekce schema={schema} onSubmit={prevent} onValidSubmit={onValidSubmit}>
+        <DilekceField name="name" label="Name">
+          <DilekceInput defaultValue="x" />
+        </DilekceField>
+        <button type="submit">Go</button>
+      </Dilekce>,
+    )
+    await screen.getByRole("button", { name: "Go" }).click()
+    expect(onValidSubmit).toHaveBeenCalledWith({ name: "x" }, expect.anything())
+  })
+
+  test("onValidSubmit's value has the schema's output type", () => {
+    // Type-level: this only has to compile.
+    const typed = (
+      <Dilekce
+        schema={z.object({ n: z.coerce.number() })}
+        onValidSubmit={(value) => {
+          expectTypeOf(value).toEqualTypeOf<{ n: number }>()
+        }}
+      />
+    )
+    const plain = (
+      <Dilekce
+        onValidSubmit={(value) => {
+          expectTypeOf(value).toEqualTypeOf<Record<string, unknown>>()
+        }}
+      />
+    )
+    expect(typed).toBeTruthy()
+    expect(plain).toBeTruthy()
+  })
+})
+
+const kindOptions = [
+  { value: "a", label: "Alpha" },
+  { value: "b", label: "Beta" },
+]
+
+/* -------------------------------------------------------------------------- */
+/*                               defaultValues                                */
+/* -------------------------------------------------------------------------- */
+
+describe("defaultValues", () => {
+  const prevent = (event: React.FormEvent) => event.preventDefault()
+
+  function Filled({
+    defaults,
+    onReset,
+    controlled = false,
+  }: {
+    defaults?: React.ComponentProps<typeof Dilekce>["defaultValues"]
+    onReset?: () => void
+    controlled?: boolean
+  }) {
+    return (
+      <Dilekce defaultValues={defaults} onReset={onReset} onSubmit={prevent}>
+        <DilekceField name="name" label="Name">
+          <DilekceInput />
+        </DilekceField>
+        <DilekceField name="bio" label="Bio">
+          <DilekceTextarea maxLength={20} />
+        </DilekceField>
+        <DilekceField name="size" label="Size">
+          <DilekceSelect options={kindOptions} />
+        </DilekceField>
+        <DilekceField name="kind" label="Kind">
+          <DilekceRadioGroup options={kindOptions} />
+        </DilekceField>
+        <DilekceField name="tags" label="Tags">
+          <DilekceCheckboxGroup options={kindOptions} />
+        </DilekceField>
+        <DilekceField name="age" label="Age">
+          <DilekceNumber />
+        </DilekceField>
+        <input type="checkbox" name="agree" data-testid="agree" />
+        {controlled && (
+          <DilekceField name="held" label="Held">
+            <DilekceInput value="mine" onChange={() => {}} />
+          </DilekceField>
+        )}
+        <button type="submit">Go</button>
+        <button type="reset">Reset</button>
+      </Dilekce>
+    )
+  }
+
+  const everything = {
+    name: "Ada",
+    bio: "Hello",
+    size: "b",
+    kind: "a",
+    tags: ["a", "b"],
+    age: 36,
+    agree: true,
+  }
+  const read = () => ({
+    name: $<HTMLInputElement>("[name=name]").value,
+    bio: $<HTMLTextAreaElement>("[name=bio]").value,
+    size: $<HTMLSelectElement>("[name=size]").value,
+    kind: document.querySelector<HTMLInputElement>("[name=kind]:checked")?.value,
+    tags: [...document.querySelectorAll<HTMLInputElement>("[name=tags]:checked")].map(
+      (i) => i.value,
+    ),
+    age: $<HTMLInputElement>("[name=age]").value,
+    agree: $<HTMLInputElement>("[name=agree]").checked,
+  })
+
+  test("every kind of control starts from its default", async () => {
+    await render(<Filled defaults={everything} />)
+    expect(read()).toEqual({
+      name: "Ada",
+      bio: "Hello",
+      size: "b",
+      kind: "a",
+      tags: ["a", "b"],
+      age: "36",
+      agree: true,
+    })
+    // Nothing is dirty: the defaults are where the form started.
+    expect($("form").dataset.dirty).toBeUndefined()
+  })
+
+  test("a reset restores them", async () => {
+    const screen = await render(<Filled defaults={everything} />)
+    await userEvent.fill($("[name=name]"), "Grace")
+    await userEvent.selectOptions($("[name=size]"), "a")
+    await userEvent.click(document.querySelectorAll<HTMLElement>("[name=kind]")[1]!)
+    await userEvent.click(document.querySelectorAll<HTMLElement>("[name=tags]")[0]!)
+    await userEvent.click($("[data-testid=agree]"))
+    expect($("form").dataset.dirty).toBe("true")
+    await screen.getByRole("button", { name: "Reset" }).click()
+    expect(read()).toEqual({
+      name: "Ada",
+      bio: "Hello",
+      size: "b",
+      kind: "a",
+      tags: ["a", "b"],
+      age: "36",
+      agree: true,
+    })
+    await expect.poll(() => $("form").dataset.dirty).toBeUndefined()
+  })
+
+  test("data-empty and the counter follow them", async () => {
+    const screen = await render(<Filled defaults={{ size: "b", bio: "x".repeat(19) }} />)
+    await expect.poll(() => $("[name=size]").dataset.empty).toBeUndefined()
+    await expect.element(screen.getByText("19/20")).toBeInTheDocument()
+  })
+
+  test("the filled dash follows them", async () => {
+    await render(
+      <Dilekce mode="filled" defaultValues={{ name: "Ada", size: "b" }}>
+        <DilekceField name="name" label="Name">
+          <DilekceInput />
+        </DilekceField>
+        <DilekceField name="size" label="Size">
+          <DilekceSelect options={kindOptions} />
+        </DilekceField>
+        <DilekceField name="other" label="Other">
+          <DilekceInput />
+        </DilekceField>
+      </Dilekce>,
+    )
+    const dash = (name: string) =>
+      getComputedStyle($(`[name=${name}]`).closest(FIELD)!, "::after").content
+    expect(dash("name")).not.toContain("—")
+    expect(dash("size")).not.toContain("—")
+    expect(dash("other")).toContain("—")
+    expect($("[name=size]").dataset.empty).toBeUndefined()
+  })
+
+  test("a control the app controls keeps its own value", async () => {
+    await render(<Filled defaults={{ held: "theirs" }} controlled />)
+    expect($<HTMLInputElement>("[name=held]").value).toBe("mine")
+  })
+
+  test("dotted names and nested objects and arrays both work", async () => {
+    await render(
+      <Dilekce
+        defaultValues={{
+          "a.b": "dotted",
+          passengers: [{ name: "Ada" }, { name: "Grace" }],
+          address: { city: "Ankara" },
+          emails: ["x@y.z"],
+        }}
+      >
+        {["a.b", "passengers.0.name", "passengers.1.name", "address.city", "emails.0"].map((n) => (
+          <DilekceField key={n} name={n} label={n}>
+            <DilekceInput />
+          </DilekceField>
+        ))}
+      </Dilekce>,
+    )
+    expect(
+      ["a.b", "passengers.0.name", "passengers.1.name", "address.city", "emails.0"].map(
+        (n) => $<HTMLInputElement>(`[name="${n}"]`).value,
+      ),
+    ).toEqual(["dotted", "Ada", "Grace", "Ankara", "x@y.z"])
+  })
+
+  test("null clears a control's markup default", async () => {
+    await render(
+      <Dilekce defaultValues={{ name: null }}>
+        <DilekceField name="name" label="Name">
+          <DilekceInput defaultValue="from markup" />
+        </DilekceField>
+      </Dilekce>,
+    )
+    expect($<HTMLInputElement>("[name=name]").value).toBe("")
+  })
+
+  test("a field that mounts later picks its default up", async () => {
+    function Later({ show }: { show: boolean }) {
+      return (
+        <Dilekce defaultValues={{ late: "here" }}>
+          {show && (
+            <DilekceField name="late" label="Late">
+              <DilekceInput />
+            </DilekceField>
+          )}
+        </Dilekce>
+      )
+    }
+    const screen = await render(<Later show={false} />)
+    await screen.rerender(<Later show />)
+    expect($<HTMLInputElement>("[name=late]").value).toBe("here")
+  })
+
+  test("new contents apply again and reset the form to them, clearing dirty", async () => {
+    const onReset = vi.fn()
+    const screen = await render(<Filled defaults={{ name: "Ada", kind: "a" }} onReset={onReset} />)
+    await userEvent.fill($("[name=name]"), "typed")
+    expect($("form").dataset.dirty).toBe("true")
+    await screen.rerender(<Filled defaults={{ name: "Grace", size: "a" }} onReset={onReset} />)
+    expect(read()).toMatchObject({ name: "Grace", size: "a", kind: undefined })
+    await expect.poll(() => $("form").dataset.dirty).toBeUndefined()
+    // The form reset itself: the app's onReset wasn't told.
+    expect(onReset).not.toHaveBeenCalled()
+    // And a user reset goes back to the new values.
+    await userEvent.fill($("[name=name]"), "again")
+    await screen.getByRole("button", { name: "Reset" }).click()
+    expect($<HTMLInputElement>("[name=name]").value).toBe("Grace")
+    expect(onReset).toHaveBeenCalledTimes(1)
+  })
+
+  test("an equal object, such as an inline literal, doesn't reset what was typed", async () => {
+    const screen = await render(<Filled defaults={{ name: "Ada" }} />)
+    await userEvent.fill($("[name=name]"), "typed")
+    await screen.rerender(<Filled defaults={{ name: "Ada" }} />)
+    expect($<HTMLInputElement>("[name=name]").value).toBe("typed")
+  })
+
+  test("a name the new object leaves out goes back to its markup", async () => {
+    function Markup({ defaults }: { defaults: Record<string, string> }) {
+      return (
+        <Dilekce defaultValues={defaults}>
+          <DilekceField name="name" label="Name">
+            <DilekceInput defaultValue="markup" />
+          </DilekceField>
+        </Dilekce>
+      )
+    }
+    const screen = await render(<Markup defaults={{ name: "set" }} />)
+    expect($<HTMLInputElement>("[name=name]").value).toBe("set")
+    await screen.rerender(<Markup defaults={{}} />)
+    expect($<HTMLInputElement>("[name=name]").value).toBe("markup")
   })
 })
