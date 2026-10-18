@@ -1,6 +1,6 @@
 import * as React from "react"
 import { flushSync } from "react-dom"
-import { afterEach, describe, expect, expectTypeOf, test, vi } from "vitest"
+import { afterEach, beforeAll, describe, expect, expectTypeOf, test, vi } from "vitest"
 import { cdp, userEvent } from "vitest/browser"
 import { cleanup, render } from "vitest-browser-react"
 import { z } from "zod"
@@ -1455,6 +1455,13 @@ describe("copying a filled form", () => {
 
 const emulate = (features: Array<{ name: string; value: string }>) =>
   cdp().send("Emulation.setEmulatedMedia", { features })
+
+// vitest.config.ts launches this file's browser with a fine, hovering pointer, so the hover and
+// pointer-fine rules are the same on every machine.
+beforeAll(() => {
+  expect(matchMedia("(pointer: fine)").matches, "the fine project's pointer").toBe(true)
+  expect(matchMedia("(hover: hover)").matches, "the fine project's hover").toBe(true)
+})
 
 afterEach(async () => {
   document.documentElement.classList.remove("dark")

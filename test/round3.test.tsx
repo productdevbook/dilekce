@@ -1,6 +1,6 @@
 import * as React from "react"
-import { afterEach, describe, expect, test, vi } from "vitest"
-import { cdp, userEvent } from "vitest/browser"
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest"
+import { userEvent } from "vitest/browser"
 import { cleanup, render } from "vitest-browser-react"
 import { z } from "zod"
 
@@ -20,14 +20,17 @@ import {
   type StandardSchemaV1,
 } from "../registry/dilekce/dilekce"
 
-/** Touch emulation makes the primary pointer coarse and hover-less, as a phone's is. */
-const touch = () =>
-  cdp().send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 1 })
+// This file runs with a fine, hovering pointer (vitest.config.ts pins it at launch). Touch
+// emulation is not used here: switching it off leaves headless Linux with no pointer at all, so the
+// touch layout is tested in test/touch.test.tsx, in a browser launched with a coarse one.
+beforeAll(() => {
+  expect(matchMedia("(pointer: fine)").matches, "the fine project's pointer").toBe(true)
+  expect(matchMedia("(hover: hover)").matches, "the fine project's hover").toBe(true)
+})
 
-afterEach(async () => {
+afterEach(() => {
   cleanup()
   document.documentElement.classList.remove("dark")
-  await cdp().send("Emulation.setTouchEmulationEnabled", { enabled: false })
 })
 
 // A submit must not navigate the test page.
@@ -491,14 +494,6 @@ describe("filled mode actions", () => {
       "b:dilekce-copy",
       "b:dilekce-change",
     ])
-  })
-
-  test("coarse pointers: always visible and in flow, so they take the label's room", async () => {
-    await touch()
-    await render(<Cells />)
-    expect(style(actions()).position).not.toBe("absolute")
-    expect(style(actions()).opacity).toBe("1")
-    expect(style($("[data-slot=dilekce-change]")).display).not.toBe("none")
   })
 
   test("an empty field with no Change has no action box over its label", async () => {
