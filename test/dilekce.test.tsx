@@ -198,6 +198,56 @@ describe("external errors", () => {
     expect(onSubmit).toHaveBeenCalledOnce()
   })
 
+  test("errors from a React 19 action survive the reset React runs after it", async () => {
+    function Page() {
+      const [state, act] = React.useActionState(
+        async (_previous: { errors: DilekceErrors }, _data: FormData) => ({
+          errors: { email: "Taken" } as DilekceErrors,
+        }),
+        { errors: {} as DilekceErrors },
+      )
+      return (
+        <Dilekce action={act} errors={state.errors}>
+          <DilekceField name="email" label="Email">
+            <DilekceInput defaultValue="a@b.c" />
+          </DilekceField>
+          <button type="submit">Save</button>
+          <button type="reset">Reset</button>
+        </Dilekce>
+      )
+    }
+    const screen = await render(<Page />)
+    await screen.getByRole("button", { name: "Save" }).click()
+    await expect.poll(() => errorOf("email")).toBe("Taken")
+    await sleep(100)
+    expect(errorOf("email")).toBe("Taken")
+    // The user asking for a reset still clears it.
+    await screen.getByRole("button", { name: "Reset" }).click()
+    expect(errorOf("email")).toBeNull()
+  })
+
+  test("a programmatic reset keeps unedited server errors, and drops edited ones", async () => {
+    await render(
+      <Dilekce errors={{ a: "Taken", b: "Taken" }}>
+        <DilekceField name="a" label="A">
+          <DilekceInput />
+        </DilekceField>
+        <DilekceField name="b" label="B">
+          <DilekceInput />
+        </DilekceField>
+      </Dilekce>,
+    )
+    $<HTMLFormElement>("form").reset()
+    await sleep(20)
+    expect(errorOf("a")).toBe("Taken")
+    await userEvent.type($("[name=a]"), "x")
+    expect(errorOf("a")).toBeNull()
+    expect(errorOf("b")).toBe("Taken")
+    $<HTMLFormElement>("form").reset()
+    await sleep(20)
+    expect(errorOf("b")).toBeNull()
+  })
+
   test("a field's own error prop wins, for react-hook-form and friends", async () => {
     await render(
       <Dilekce>

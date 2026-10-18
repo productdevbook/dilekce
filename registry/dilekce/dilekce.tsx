@@ -123,6 +123,8 @@ interface FieldContextValue {
   setGroup: (group: boolean) => void
 }
 
+const NO_ERRORS: DilekceErrors = {}
+
 const FormContext = React.createContext<FormContextValue | null>(null)
 const FieldContext = React.createContext<FieldContextValue | null>(null)
 
@@ -328,12 +330,28 @@ function Dilekce({
   ...props
 }: DilekceProps) {
   const formRef = React.useRef<HTMLFormElement>(null)
-  const [errors, setErrors] = React.useState<DilekceErrors>(errorsProp ?? {})
+  const supplied = errorsProp ?? NO_ERRORS
+  const [errors, setErrors] = React.useState<DilekceErrors>(supplied)
   const [lastProp, setLastProp] = React.useState(errorsProp)
   if (errorsProp !== lastProp) {
     setLastProp(errorsProp)
-    setErrors(errorsProp ?? {})
+    setErrors(supplied)
   }
+  // React 19 resets the form after a function action, which would wipe the
+  // errors the action just returned. A reset only clears errors the user has
+  // edited away from, or any when a reset button asked for it.
+  const resetButton = React.useRef(false)
+  React.useEffect(() => {
+    const form = formRef.current
+    if (!form) return
+    const onClick = (event: Event) => {
+      if (!(event.target as Element).closest("button[type=reset], input[type=reset]")) return
+      resetButton.current = true
+      setTimeout(() => (resetButton.current = false))
+    }
+    form.addEventListener("click", onClick, true)
+    return () => form.removeEventListener("click", onClick, true)
+  }, [])
 
   const clearError = React.useCallback((name: string) => {
     setErrors((current) => {
@@ -485,7 +503,9 @@ function Dilekce({
         }}
         onReset={(event) => {
           for (const field of fields.current) field.reset()
-          setErrors({})
+          const asked = resetButton.current
+          resetButton.current = false
+          setErrors((current) => (asked || current !== supplied ? NO_ERRORS : current))
           setAnnouncement("")
           onReset?.(event)
           // The browser restores the values after this event; measure then.
