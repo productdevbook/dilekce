@@ -24,6 +24,7 @@ import {
 afterEach(() => cleanup())
 
 const tick = () => new Promise((r) => requestAnimationFrame(() => r(null)))
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 const $ = <T extends Element = HTMLElement>(selector: string) =>
   document.querySelector<T>(selector)!
@@ -482,6 +483,53 @@ describe("custom rules", () => {
     finish(null)
     await expect.poll(() => onSubmit.mock.calls.length).toBe(1)
     expect(errorOf("user")).toBeNull()
+  })
+
+  test("a second submit while the check runs is ignored, and the replay goes through once", async () => {
+    let finish!: (message: string | null) => void
+    const validate = vi.fn(() => new Promise<string | null>((resolve) => (finish = resolve)))
+    const action = vi.fn()
+    const screen = await render(
+      <Dilekce action={action}>
+        <DilekceField name="user" label="Username" validate={validate}>
+          <DilekceInput defaultValue="ada" />
+        </DilekceField>
+        <button type="submit">Save</button>
+      </Dilekce>,
+    )
+    const save = screen.getByRole("button", { name: "Save" })
+    await save.click()
+    await save.click()
+    await save.click()
+    expect(validate).toHaveBeenCalledOnce()
+    finish(null)
+    await expect.poll(() => action.mock.calls.length).toBe(1)
+    await sleep(100)
+    expect(action).toHaveBeenCalledOnce()
+    expect(validate).toHaveBeenCalledOnce()
+  })
+
+  test("values edited while the check runs are checked again before the submit", async () => {
+    const seen: string[] = []
+    const validate = vi.fn(async (value: string | string[]) => {
+      seen.push(String(value))
+      await sleep(80)
+      return value === "bad" ? "Not that one" : null
+    })
+    const onSubmit = vi.fn((event: React.FormEvent) => event.preventDefault())
+    const screen = await render(
+      <Dilekce onSubmit={onSubmit}>
+        <DilekceField name="user" label="Username" validate={validate}>
+          <DilekceInput defaultValue="ada" />
+        </DilekceField>
+        <button type="submit">Save</button>
+      </Dilekce>,
+    )
+    await screen.getByRole("button", { name: "Save" }).click()
+    $<HTMLInputElement>("[name=user]").value = "bad"
+    await expect.poll(() => errorOf("user")).toBe("Not that one")
+    expect(seen).toEqual(["ada", "bad"])
+    expect(onSubmit).not.toHaveBeenCalled()
   })
 
   test("a checkbox group's rule gets every checked value", async () => {

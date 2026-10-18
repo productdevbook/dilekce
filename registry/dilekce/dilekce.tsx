@@ -398,6 +398,8 @@ function Dilekce({
   const [announcement, setAnnouncement] = React.useState("")
   const [checking, setChecking] = React.useState(false)
   const approved = React.useRef(false)
+  // The values the running check was started with: edits made meanwhile get checked again.
+  const checkingRef = React.useRef<string | null>(null)
 
   const fail = (controls: HTMLElement[]) => {
     controls.sort(inDocumentOrder)
@@ -431,6 +433,11 @@ function Dilekce({
           className,
         )}
         onSubmit={(event) => {
+          // A check is already running; its replay will be the one submit.
+          if (checkingRef.current != null) {
+            event.preventDefault()
+            return
+          }
           const done = () => {
             onSubmit?.(event)
             settle()
@@ -459,15 +466,19 @@ function Dilekce({
           event.preventDefault()
           const form = event.currentTarget
           const submitter = (event.nativeEvent as SubmitEvent).submitter
+          const held = snapshot(form)
+          checkingRef.current = held
           setChecking(true)
           void Promise.all(results).then((controls) => {
+            checkingRef.current = null
             setChecking(false)
             const invalid = controls.filter((control): control is HTMLElement => control != null)
             if (invalid.length > 0) {
               fail(invalid)
               return
             }
-            approved.current = true
+            // Edited while it ran: the replay validates the new values from the start.
+            approved.current = snapshot(form) === held
             const button = submitter as HTMLButtonElement | null
             form.requestSubmit(button?.form === form ? button : undefined)
           })
