@@ -111,6 +111,8 @@ interface FormContextValue {
   /** Re-reads whether the form differs from where it started. */
   measure: () => void
   copyable: boolean
+  /** Says something through the form's one polite live region. */
+  announce: (text: string) => void
 }
 
 interface FieldContextValue {
@@ -120,6 +122,8 @@ interface FieldContextValue {
   invalid: boolean
   describedBy?: string | undefined
   readOnly: boolean
+  /** The field's messages: the group says "required" with the same word as its error. */
+  messages: DilekceMessages
   labelRef: React.RefObject<HTMLElement | null>
   /** Groups (radios, checkboxes) can't be a <label>'s target. */
   setGroup: (group: boolean) => void
@@ -456,10 +460,36 @@ function Dilekce({
   }, [markDirty])
   React.useLayoutEffect(settle, [settle])
 
+  // The one polite live region: a stopped submit says how many fields need
+  // attention, for screen reader users who can't see the cells turn red.
+  const [announcement, setAnnouncement] = React.useState("")
+
+  // Messages fields raise on their own (on blur, live, "Checking…", "Copied") share
+  // this one region. Those that land in the same moment are read as one sentence list.
+  const queued = React.useRef<string[]>([])
+  const flushing = React.useRef<ReturnType<typeof setTimeout>>(undefined)
+  React.useEffect(
+    () => () => {
+      clearTimeout(flushing.current)
+      flushing.current = undefined
+    },
+    [],
+  )
+  const announce = React.useCallback((text: string) => {
+    queued.current.push(text)
+    if (flushing.current !== undefined) return
+    flushing.current = setTimeout(() => {
+      flushing.current = undefined
+      const spoken = queued.current.join(". ")
+      queued.current = []
+      setAnnouncement((last) => (last === spoken ? `${spoken}\u200b` : spoken))
+    })
+  }, [])
+
   const merged = React.useMemo(() => ({ ...dilekceMessages.en, ...messages }), [messages])
   const context = React.useMemo<FormContextValue>(
-    () => ({ mode, messages: merged, errors, clearError, register, measure, copyable }),
-    [mode, merged, errors, clearError, register, measure, copyable],
+    () => ({ mode, messages: merged, errors, clearError, register, measure, copyable, announce }),
+    [mode, merged, errors, clearError, register, measure, copyable, announce],
   )
 
   React.useEffect(() => {
@@ -491,9 +521,6 @@ function Dilekce({
     }
   }, [measure])
 
-  // A stopped submit is announced once, politely, for screen reader users who
-  // can't see the cells turn red.
-  const [announcement, setAnnouncement] = React.useState("")
   const [checking, setChecking] = React.useState(false)
   const approved = React.useRef(false)
   // The values the running check was started with: edits made meanwhile get checked again.
@@ -525,7 +552,7 @@ function Dilekce({
         data-checking={checking || undefined}
         aria-busy={checking || undefined}
         className={cn(
-          "group/dilekce @container/dilekce flex flex-col gap-px overflow-clip rounded-lg border bg-border text-foreground [--dk-ink:var(--primary)]",
+          "group/dilekce @container/dilekce flex flex-col gap-px overflow-clip rounded-lg border bg-border text-foreground [--dk-ink:var(--primary)] forced-colors:gap-0",
           "print:rounded-none print:[print-color-adjust:exact]",
           DENSITY,
           className,
@@ -660,7 +687,7 @@ function DilekceSection({
   return (
     <fieldset
       data-slot="dilekce-section"
-      className={cn("m-0 flex min-w-0 flex-col gap-px border-0 p-0", className)}
+      className={cn("m-0 flex min-w-0 flex-col gap-px border-0 p-0 forced-colors:gap-0", className)}
       {...props}
     >
       {legend != null && (
@@ -668,7 +695,7 @@ function DilekceSection({
         <legend
           data-slot="dilekce-legend"
           className={cn(
-            "float-left w-full bg-muted px-(--dk-px) py-[calc(var(--dk-py)*0.9)] font-mono text-(length:--dk-label) font-semibold tracking-[0.08em] text-foreground uppercase",
+            "float-left w-full bg-muted forced-colors:border forced-colors:border-[CanvasText] px-(--dk-px) py-[calc(var(--dk-py)*0.9)] font-mono text-(length:--dk-label) font-semibold tracking-[0.08em] text-foreground uppercase",
             "print:break-after-avoid",
             legendClassName,
           )}
@@ -690,7 +717,10 @@ function DilekceRow({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="dilekce-row"
-      className={cn("flex flex-wrap gap-px print:break-inside-avoid", className)}
+      className={cn(
+        "flex flex-wrap gap-px forced-colors:gap-0 print:break-inside-avoid",
+        className,
+      )}
       {...props}
     />
   )
@@ -701,15 +731,19 @@ function DilekceRow({ className, ...props }: React.ComponentProps<"div">) {
 /* -------------------------------------------------------------------------- */
 
 const FIELD = [
-  "group/field relative grid min-w-0 grid-cols-[minmax(0,1fr)_auto] content-start gap-x-2 gap-y-(--dk-gap) bg-background px-(--dk-px) py-(--dk-py) cursor-text transition-[background-color,box-shadow] duration-150 ease-out",
+  "group/field relative grid min-w-0 grid-cols-[minmax(0,1fr)_auto] content-start gap-x-2 gap-y-(--dk-gap) bg-background px-(--dk-px) py-(--dk-py) cursor-text transition-[background-color,box-shadow] duration-150 ease-out motion-reduce:transition-none",
   "[grid-template-areas:'label_error'_'control_control'_'description_description']",
   "data-below:[grid-template-areas:'label_label'_'control_control'_'error_error'_'description_description']",
   // The tint alone is too faint for a focus indicator (WCAG 1.4.11), so a 2px
   // line in the focus color carries it.
   "[--dk-focus:var(--primary)] data-invalid:[--dk-focus:var(--destructive)]",
-  "hover:bg-accent/50 focus-within:bg-accent focus-within:shadow-[inset_0_-2px_0_var(--dk-focus)]",
+  // Tints are mixed against --background, never translucent: a translucent tint
+  // lets the grid color show through and drops the small text on it under 4.5:1.
+  // The danger color for text is pulled toward the foreground for the same reason.
+  "data-invalid:[--dk-danger:color-mix(in_oklch,var(--destructive)_85%,var(--foreground))]",
+  "hover:bg-[color-mix(in_oklch,var(--accent)_50%,var(--background))] focus-within:bg-accent focus-within:shadow-[inset_0_-2px_0_var(--dk-focus)]",
   "group-data-[focus=ring]/dilekce:focus-within:shadow-[inset_0_0_0_2px_var(--dk-focus)]",
-  "data-invalid:bg-destructive/5 data-invalid:hover:bg-destructive/8 data-invalid:focus-within:bg-destructive/10",
+  "data-invalid:bg-[color-mix(in_oklch,var(--destructive)_5%,var(--background))] data-invalid:hover:bg-[color-mix(in_oklch,var(--destructive)_8%,var(--background))] data-invalid:focus-within:bg-[color-mix(in_oklch,var(--destructive)_10%,var(--background))]",
   "has-[select]:cursor-default has-[:is(input,select,textarea):disabled]:cursor-not-allowed has-[:is(input,select,textarea):disabled]:opacity-55",
   // Radios and checkboxes never wrap inside a cell: the cell refuses to shrink
   // below them, so the row wraps the whole cell. Narrow, they stack instead.
@@ -719,6 +753,10 @@ const FIELD = [
   "group-data-[mode=filled]/dilekce:has-focus-visible:shadow-[inset_0_0_0_2px_var(--dk-focus)]",
   "after:pointer-events-none after:self-start after:text-(length:--dk-text) after:leading-[1.4] after:text-muted-foreground after:[grid-area:control]",
   "group-data-[mode=filled]/dilekce:has-[:placeholder-shown]:after:content-['—'] group-data-[mode=filled]/dilekce:has-data-empty:after:content-['—']",
+  // Forced colors (Windows High Contrast) strips backgrounds and shadows: the grid
+  // lines, drawn as background showing through the gaps, become real borders, and
+  // the focus indicator becomes an outline in a system color.
+  "forced-colors:border forced-colors:border-[CanvasText] forced-colors:focus-within:outline-3 forced-colors:focus-within:-outline-offset-3 forced-colors:focus-within:[outline-color:Highlight] forced-colors:focus-within:outline-solid",
   "print:break-inside-avoid print:shadow-none!",
 ]
 
@@ -812,7 +850,13 @@ function DilekceField({
   const run = React.useRef(0)
   // The value the message on show was last worked out for.
   const checked = React.useRef("")
-  const check = React.useCallback((): string | null | Promise<string | null> => {
+  // Said last through the live region, so a message that stays the same isn't repeated.
+  const spoken = React.useRef<string | null>(null)
+  /**
+   * `quiet` is a submit: the form announces how many fields need attention and
+   * focus lands on the first, so the messages themselves aren't read out.
+   */
+  const check = React.useCallback((quiet = false): string | null | Promise<string | null> => {
     const field = fieldRef.current
     if (!field) return null
     const { all, validate } = latest.current
@@ -825,6 +869,7 @@ function DilekceField({
     }
     const found = readValidity(field, all)
     if (found || !validate) {
+      if (quiet) spoken.current = found
       setPending(false)
       setNative(found)
       return found
@@ -836,6 +881,7 @@ function DilekceField({
 
     const result = validate(value, data)
     if (!isThenable<ValidatorResult>(result)) {
+      if (quiet) spoken.current = asMessage(result)
       setPending(false)
       setNative(asMessage(result))
       return asMessage(result)
@@ -845,6 +891,7 @@ function DilekceField({
       (resolved) => {
         const message = asMessage(resolved)
         if (token === run.current) {
+          if (quiet) spoken.current = message
           setPending(false)
           setNative(message)
         }
@@ -886,7 +933,7 @@ function DilekceField({
       validate: () => {
         const field = fieldRef.current
         if (!field) return null
-        const result = check()
+        const result = check(true)
         if (allDisabled(field)) return null
         const blocked = (message: string | null) =>
           hasContent(latest.current.external) || message ? controlOf(field) : null
@@ -935,6 +982,30 @@ function DilekceField({
     undefined
   const near = count != null && count.length >= count.max * 0.9
 
+  /*
+   * Messages reach screen readers through the form's one live region: the
+   * label and the message, when the message appears or changes, never again
+   * while it stays the same (live validation re-sets it on every keystroke).
+   */
+  const announce = form?.announce
+  const labelOf = () => labelRef.current?.textContent?.trim() ?? ""
+  React.useEffect(() => {
+    const shown = invalid
+      ? typeof message === "string"
+        ? message
+        : (errorRef.current?.textContent?.trim() ?? "")
+      : pending
+        ? (all.pending ?? "")
+        : null
+    if (!shown) {
+      spoken.current = null
+      return
+    }
+    if (shown === spoken.current) return
+    spoken.current = shown
+    announce?.(`${labelOf()}: ${shown}`)
+  })
+
   const context = React.useMemo<FieldContextValue>(
     () => ({
       id,
@@ -943,18 +1014,19 @@ function DilekceField({
       invalid,
       describedBy,
       readOnly,
+      messages: all,
       labelRef,
       setGroup,
       sync,
     }),
-    [id, labelId, name, invalid, describedBy, readOnly, sync],
+    [id, labelId, name, invalid, describedBy, readOnly, all, sync],
   )
 
   const labelClass = cn(
     "min-w-0 cursor-[inherit] overflow-hidden font-mono text-(length:--dk-label) leading-[1.3] font-medium tracking-[0.06em] text-ellipsis whitespace-nowrap text-muted-foreground uppercase select-none [grid-area:label]",
-    "group-focus-within/field:text-foreground group-data-invalid/field:text-destructive",
+    "group-focus-within/field:text-foreground group-data-invalid/field:text-(--dk-danger)",
     // Visual only: assistive tech already announces "required".
-    "after:text-primary group-has-required/field:after:content-['_*'_/_''] group-has-data-required/field:after:content-['_*'_/_''] group-data-invalid/field:after:text-destructive group-data-[mode=filled]/dilekce:after:content-none!",
+    "after:text-primary group-has-required/field:after:content-['_*'_/_''] group-has-data-required/field:after:content-['_*'_/_''] group-data-invalid/field:after:text-(--dk-danger) group-data-[mode=filled]/dilekce:after:content-none!",
     "group-has-data-scrub/field:cursor-ew-resize group-data-[mode=filled]/dilekce:cursor-default",
   )
 
@@ -1034,7 +1106,7 @@ function DilekceField({
             ref={errorRef}
             id={errorId}
             data-slot="dilekce-error"
-            className="font-mono text-(length:--dk-label) leading-[1.3] font-medium tracking-[0.02em] whitespace-nowrap text-destructive [grid-area:error] group-data-below/field:text-pretty group-data-below/field:whitespace-normal group-data-below/field:[overflow-wrap:anywhere]"
+            className="font-mono text-(length:--dk-label) leading-[1.3] font-medium tracking-[0.02em] whitespace-nowrap text-(--dk-danger) [grid-area:error] group-data-below/field:text-pretty group-data-below/field:whitespace-normal group-data-below/field:[overflow-wrap:anywhere]"
           >
             {message}
           </span>
@@ -1042,7 +1114,7 @@ function DilekceField({
         {!invalid && pending && (
           <span
             data-slot="dilekce-pending"
-            className="animate-pulse font-mono text-(length:--dk-label) leading-[1.3] font-medium tracking-[0.02em] whitespace-nowrap text-muted-foreground [grid-area:error]"
+            className="animate-pulse motion-reduce:animate-none font-mono text-(length:--dk-label) leading-[1.3] font-medium tracking-[0.02em] whitespace-nowrap text-muted-foreground [grid-area:error]"
           >
             {all.pending}
           </span>
@@ -1053,7 +1125,7 @@ function DilekceField({
             data-slot="dilekce-counter"
             data-near={near || undefined}
             aria-hidden="true"
-            className="hidden font-mono text-(length:--dk-label) leading-[1.3] tracking-[0.02em] whitespace-nowrap text-muted-foreground tabular-nums [grid-area:error] group-focus-within/field:inline data-near:inline data-near:text-foreground"
+            className="hidden font-mono text-(length:--dk-label) leading-[1.3] tracking-[0.02em] whitespace-nowrap text-muted-foreground tabular-nums [grid-area:error] group-focus-within/field:inline group-focus-within/field:text-[color-mix(in_oklch,var(--muted-foreground)_70%,var(--foreground))] data-near:inline data-near:text-foreground"
           >
             {count.length}/{count.max}
           </span>
@@ -1064,8 +1136,8 @@ function DilekceField({
             data-slot="dilekce-copy"
             aria-labelledby={`${copyId} ${labelId}`}
             className={cn(
-              "-my-0.5 inline-flex cursor-pointer items-center gap-1 self-start justify-self-end rounded-sm px-1 py-0.5 font-mono text-(length:--dk-label) leading-[1.3] tracking-[0.02em] text-muted-foreground opacity-0 transition-opacity duration-150 [grid-area:error]",
-              "group-hover/field:opacity-100 hover:bg-foreground/8 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring pointer-coarse:opacity-100 data-copied:opacity-100",
+              "-mt-1 inline-flex min-h-6 min-w-6 cursor-pointer items-center justify-center gap-1 self-start justify-self-end rounded-sm px-1 font-mono text-(length:--dk-label) leading-[1.3] tracking-[0.02em] text-muted-foreground opacity-0 transition-opacity duration-150 motion-reduce:transition-none [grid-area:error]",
+              "group-hover/field:opacity-100 hover:bg-foreground/8 hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-(--dk-focus) pointer-coarse:opacity-100 data-copied:opacity-100",
               // Nothing to copy: an empty field, or a group with nothing chosen.
               "group-has-[:placeholder-shown]/field:hidden group-has-data-empty/field:hidden group-has-[[data-slot=dilekce-choices]]/field:group-not-has-checked/field:hidden",
               "print:hidden",
@@ -1077,6 +1149,7 @@ function DilekceField({
               try {
                 await navigator.clipboard.writeText(displayText(field))
                 setCopied(true)
+                announce?.(`${labelOf()}: ${all.copied}`)
                 setTimeout(() => setCopied(false), 1200)
               } catch {
                 // Clipboard blocked: the value is still there to select.
@@ -1185,14 +1258,34 @@ const AFFIX = cn(
   "group-data-[mode=filled]/dilekce:group-has-[:placeholder-shown]/field:invisible",
 )
 
-function Affix({ side, children }: { side: "leading" | "trailing"; children: React.ReactNode }) {
+/** Ids for the affixes, so the control can be described by "kg" or "$". */
+function useAffixIds(leading: React.ReactNode, trailing: React.ReactNode) {
+  const id = React.useId()
+  return {
+    leading: hasContent(leading) ? `${id}-leading` : undefined,
+    trailing: hasContent(trailing) ? `${id}-trailing` : undefined,
+  }
+}
+
+function Affix({
+  side,
+  id,
+  children,
+}: {
+  side: "leading" | "trailing"
+  id: string | undefined
+  children: React.ReactNode
+}) {
   if (!hasContent(children)) return null
   return (
-    <span data-slot="dilekce-affix" data-side={side} aria-hidden="true" className={AFFIX}>
+    <span data-slot="dilekce-affix" data-side={side} id={id} className={AFFIX}>
       {children}
     </span>
   )
 }
+
+const describedWith = (...ids: Array<string | undefined>) =>
+  ids.filter(Boolean).join(" ") || undefined
 
 export interface DilekceInputProps extends React.ComponentProps<"input">, DilekceAffixProps {}
 
@@ -1203,6 +1296,11 @@ function DilekceInput({
   trailing,
   ...props
 }: DilekceInputProps) {
+  const affixes = useAffixIds(leading, trailing)
+  const control = useControl({
+    ...props,
+    "aria-describedby": describedWith(props["aria-describedby"], affixes.leading, affixes.trailing),
+  })
   const input = (
     <input
       data-slot="dilekce-input"
@@ -1210,15 +1308,19 @@ function DilekceInput({
       placeholder={placeholder}
       className={cn(CONTROL_CLASS, (leading != null || trailing != null) && "flex-1", className)}
       {...props}
-      {...useControl(props)}
+      {...control}
     />
   )
   if (leading == null && trailing == null) return input
   return (
     <div className="flex min-w-0 items-baseline gap-1 [grid-area:control]">
-      <Affix side="leading">{leading}</Affix>
+      <Affix side="leading" id={affixes.leading}>
+        {leading}
+      </Affix>
       {input}
-      <Affix side="trailing">{trailing}</Affix>
+      <Affix side="trailing" id={affixes.trailing}>
+        {trailing}
+      </Affix>
     </div>
   )
 }
@@ -1415,7 +1517,11 @@ function DilekceNumber({
   ref,
   ...props
 }: DilekceNumberProps) {
-  const control = useControl(props)
+  const affixes = useAffixIds(leading, trailing)
+  const control = useControl({
+    ...props,
+    "aria-describedby": describedWith(props["aria-describedby"], affixes.leading, affixes.trailing),
+  })
   const field = useField()
   const inputRef = React.useRef<HTMLInputElement>(null)
   const mergedRef = useMergedRef(inputRef, ref)
@@ -1488,7 +1594,9 @@ function DilekceNumber({
 
   return (
     <div className="flex min-w-0 items-center gap-0.5 [grid-area:control]">
-      <Affix side="leading">{leading}</Affix>
+      <Affix side="leading" id={affixes.leading}>
+        {leading}
+      </Affix>
       <input
         ref={mergedRef}
         type="number"
@@ -1504,13 +1612,15 @@ function DilekceNumber({
         {...props}
         {...control}
       />
-      <Affix side="trailing">{trailing}</Affix>
+      <Affix side="trailing" id={affixes.trailing}>
+        {trailing}
+      </Affix>
       {!locked && (
         <>
-          <Stepper label={decrementLabel} onStep={() => nudge(-1)}>
+          <Stepper label={decrementLabel} labelId={field?.labelId} onStep={() => nudge(-1)}>
             <path d="M2.5 5h5" />
           </Stepper>
-          <Stepper label={incrementLabel} onStep={() => nudge(1)}>
+          <Stepper label={incrementLabel} labelId={field?.labelId} onStep={() => nudge(1)}>
             <path d="M2.5 5h5M5 2.5v5" />
           </Stepper>
         </>
@@ -1521,14 +1631,20 @@ function DilekceNumber({
 
 function Stepper({
   label,
+  labelId,
   onStep,
   children,
 }: {
   label: string
+  /** The field's label: the button is named "Decrease" + that, e.g. "Decrease Weight". */
+  labelId: string | undefined
   onStep: () => void
   children: React.ReactNode
 }) {
+  const id = React.useId()
   const timer = React.useRef<ReturnType<typeof setTimeout>>(undefined)
+  // A press already stepped on pointerdown: the click that follows it must not step again.
+  const pressed = React.useRef(false)
   const stop = () => clearTimeout(timer.current)
   React.useEffect(() => stop, [])
 
@@ -1537,11 +1653,15 @@ function Stepper({
       type="button"
       // The input's own arrow keys step it; the buttons are for pointers.
       tabIndex={-1}
+      id={id}
+      // Naming itself first: aria-labelledby that includes the button reads its aria-label.
       aria-label={label}
-      className="grid size-5.5 shrink-0 place-items-center rounded-sm text-muted-foreground opacity-0 transition-[opacity,background-color,color] duration-150 ease-out group-focus-within/field:opacity-100 group-hover/field:opacity-100 pointer-coarse:opacity-100 hover:bg-foreground/8 hover:text-foreground active:bg-foreground/14"
+      aria-labelledby={labelId ? `${id} ${labelId}` : undefined}
+      className="grid size-6 shrink-0 place-items-center rounded-sm text-muted-foreground opacity-0 transition-[opacity,background-color,color] duration-150 ease-out motion-reduce:transition-none group-focus-within/field:opacity-100 group-hover/field:opacity-100 pointer-coarse:opacity-100 hover:bg-foreground/8 hover:text-foreground active:bg-foreground/14"
       onPointerDown={(event) => {
         if (event.button !== 0) return
         event.preventDefault()
+        pressed.current = true
         onStep()
         // Held down, it repeats: a pause, then quickly.
         const repeat = (delay: number) => {
@@ -1553,11 +1673,19 @@ function Stepper({
         repeat(400)
       }}
       onPointerUp={stop}
-      onPointerLeave={stop}
-      onPointerCancel={stop}
-      onClick={(event) => {
-        // Keyboard or assistive tech activation, with no pointer involved.
-        if (event.detail === 0) onStep()
+      onPointerLeave={() => {
+        stop()
+        pressed.current = false
+      }}
+      onPointerCancel={() => {
+        stop()
+        pressed.current = false
+      }}
+      onClick={() => {
+        // A press stepped already; a click with no press before it (keyboard,
+        // assistive tech, voice control, a script) steps here.
+        if (pressed.current) pressed.current = false
+        else onStep()
       }}
     >
       <svg
@@ -1589,9 +1717,13 @@ const CHOICE = cn(
 )
 
 const MARK = cn(
-  "peer size-3.75 shrink-0 appearance-none border-[1.5px] border-muted-foreground bg-background outline-none transition-[background-color,border-color] duration-150 ease-out",
-  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+  "peer size-3.75 shrink-0 appearance-none border-[1.5px] border-muted-foreground bg-background outline-none transition-[background-color,border-color] duration-150 ease-out motion-reduce:transition-none",
+  // The cell's focus color (primary, destructive when invalid), not --ring: ring is under 3:1.
+  // outline-none above turns the outline style off for good; the focus state turns it back on.
+  "focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-(--dk-focus)",
   "checked:border-primary checked:bg-primary",
+  // Forced colors drops the fill and the inset shadow: a checked mark is Highlight.
+  "forced-colors:border-[CanvasText] forced-colors:checked:border-[Highlight] forced-colors:checked:bg-[Highlight]",
   "group-data-[mode=filled]/dilekce:checked:border-(--dk-ink) group-data-[mode=filled]/dilekce:checked:bg-(--dk-ink)",
 )
 
@@ -1660,7 +1792,10 @@ function DilekceRadioGroup({
             onChange={(event) => {
               if (event.currentTarget.checked) onValueChange?.(option.value)
             }}
-            className={cn(MARK, "rounded-full checked:shadow-[inset_0_0_0_3px_var(--background)]")}
+            className={cn(
+              MARK,
+              "rounded-full checked:shadow-[inset_0_0_0_3px_var(--background)] forced-colors:checked:border-[5px] forced-colors:checked:bg-[Canvas]",
+            )}
             {...guard}
           />
           {option.label}
@@ -1686,6 +1821,7 @@ function DilekceCheckboxGroup({
   useGroupLabel()
   const control = useControl({ name, value })
   const guard = useReadOnlyGuard(Boolean(control.readOnly))
+  const requiredId = React.useId()
 
   return (
     <div
@@ -1693,12 +1829,21 @@ function DilekceCheckboxGroup({
       data-slot="dilekce-choices"
       data-required={required || undefined}
       aria-labelledby={field?.labelId}
-      aria-describedby={control["aria-describedby"]}
+      // aria-required is not allowed on a group, and on each box it would say every
+      // one must be ticked: "at least one" is said in words, by the field's message.
+      aria-describedby={describedWith(
+        required ? requiredId : undefined,
+        control["aria-describedby"],
+      )}
       aria-invalid={control["aria-invalid"]}
-      aria-readonly={control.readOnly}
       className={cn(CHOICES, className)}
       {...props}
     >
+      {required && (
+        <span id={requiredId} className="sr-only">
+          {field?.messages.valueMissing ?? dilekceMessages.en.valueMissing}
+        </span>
+      )}
       {options.map((option) => (
         <label key={option.value} className={CHOICE}>
           <span className="relative grid place-items-center">
@@ -1707,6 +1852,8 @@ function DilekceCheckboxGroup({
               name={control.name}
               value={option.value}
               disabled={disabled || option.disabled}
+              // Valid on a checkbox, not on its group.
+              aria-readonly={control.readOnly}
               // Uncontrolled unless `value` is given, so a form reset resets it.
               checked={value === undefined ? undefined : value.includes(option.value)}
               defaultChecked={
@@ -1732,7 +1879,7 @@ function DilekceCheckboxGroup({
             <svg
               viewBox="0 0 10 10"
               aria-hidden="true"
-              className="pointer-events-none absolute hidden size-2.5 text-primary-foreground peer-checked:block"
+              className="pointer-events-none absolute hidden size-2.5 text-primary-foreground peer-checked:block forced-colors:text-[HighlightText]"
             >
               <path
                 d="M2 5.5 4.2 7.5 8 3"

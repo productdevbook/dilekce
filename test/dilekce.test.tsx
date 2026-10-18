@@ -1,7 +1,7 @@
 import * as React from "react"
 import { flushSync } from "react-dom"
 import { afterEach, describe, expect, test, vi } from "vitest"
-import { userEvent } from "vitest/browser"
+import { cdp, userEvent } from "vitest/browser"
 import { cleanup, render } from "vitest-browser-react"
 
 import "../src/index.css"
@@ -372,12 +372,12 @@ describe("controls", () => {
       </Dilekce>,
     )
     const input = $<HTMLInputElement>("[name=qty]")
-    await screen.getByRole("button", { name: "Increase" }).click()
+    await screen.getByRole("button", { name: "Increase Qty" }).click()
     expect(input.value).toBe("2")
-    await screen.getByRole("button", { name: "Increase" }).click()
+    await screen.getByRole("button", { name: "Increase Qty" }).click()
     expect(input.value).toBe("2")
     expect(onChange).toHaveBeenCalledOnce()
-    await screen.getByRole("button", { name: "Decrease" }).click()
+    await screen.getByRole("button", { name: "Decrease Qty" }).click()
     expect(input.value).toBe("1")
   })
 
@@ -391,15 +391,15 @@ describe("controls", () => {
       </Dilekce>,
     )
     const input = $<HTMLInputElement>("[name=price]")
-    await screen.getByRole("button", { name: "Increase" }).click()
+    await screen.getByRole("button", { name: "Increase Price" }).click()
     expect(input.value).toBe("2.25")
-    await screen.getByRole("button", { name: "Increase" }).click()
+    await screen.getByRole("button", { name: "Increase Price" }).click()
     expect(input.value).toBe("3.00")
-    await screen.getByRole("button", { name: "Increase" }).click()
+    await screen.getByRole("button", { name: "Increase Price" }).click()
     expect(input.value).toBe("3.00")
     expect(onChange).toHaveBeenCalledTimes(2)
     await userEvent.clear(input)
-    await screen.getByRole("button", { name: "Increase" }).click()
+    await screen.getByRole("button", { name: "Increase Price" }).click()
     expect(input.value).toBe("1")
   })
 
@@ -859,7 +859,10 @@ describe("affixes and counter", () => {
     const input = $("[name=price]").getBoundingClientRect()
     expect(lead!.getBoundingClientRect().right).toBeLessThanOrEqual(input.left)
     expect(trail!.getBoundingClientRect().left).toBeGreaterThanOrEqual(input.right)
-    expect(lead!.getAttribute("aria-hidden")).toBe("true")
+    // Not hidden: the control is described by them, so "₺" and "kg" are read.
+    expect(lead!.getAttribute("aria-hidden")).toBeNull()
+    expect(describedText($("[name=price]"))).toBe("₺ TRY")
+    expect(describedText($("[name=w]"))).toBe("kg")
     expect(document.querySelectorAll("[data-slot=dilekce-affix]")).toHaveLength(3)
   })
 
@@ -1141,7 +1144,7 @@ describe("refs", () => {
     )
     expect(field.ref).toHaveBeenCalledWith($("[name=qty]"))
     expect(object.current).toBe($("[name=other]"))
-    await screen.getByRole("button", { name: "Increase" }).first().click()
+    await screen.getByRole("button", { name: "Increase Qty" }).click()
     expect($<HTMLInputElement>("[name=qty]").value).toBe("2")
 
     const label = $("label")
@@ -1419,5 +1422,484 @@ describe("copying a filled form", () => {
       </>,
     )
     expect(document.querySelector("[data-slot=dilekce-copy]")).toBeNull()
+  })
+})
+
+/* -------------------------------------------------------------------------- */
+/*                                Accessibility                               */
+/* -------------------------------------------------------------------------- */
+
+const emulate = (features: Array<{ name: string; value: string }>) =>
+  cdp().send("Emulation.setEmulatedMedia", { features })
+
+afterEach(async () => {
+  document.documentElement.classList.remove("dark")
+  await emulate([])
+})
+
+/** A CSS color as [r, g, b, a], whatever notation the browser computed it in. */
+function rgba(css: string) {
+  const context = document.createElement("canvas").getContext("2d", { willReadFrequently: true })!
+  context.fillStyle = css
+  context.fillRect(0, 0, 1, 1)
+  return [...context.getImageData(0, 0, 1, 1).data]
+}
+
+const luminance = (css: string) => {
+  const [r = 0, g = 0, b = 0] = rgba(css).map((channel) => {
+    const c = channel / 255
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+const ratio = (a: string, b: string) => {
+  const [hi = 0, lo = 0] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+  return (hi + 0.05) / (lo + 0.05)
+}
+
+const style = (el: Element, pseudo?: string) => getComputedStyle(el, pseudo)
+const fieldOf = (name: string) => $(`[name=${name}]`).closest<HTMLElement>(FIELD)!
+const FIELD = "[data-slot=dilekce-field]"
+
+describe("contrast", () => {
+  function Contrast() {
+    return (
+      <Dilekce>
+        <DilekceRow>
+          <DilekceField name="name" label="Full name">
+            <DilekceInput required />
+          </DilekceField>
+          <DilekceField name="bio" label="Bio">
+            <DilekceTextarea maxLength={40} defaultValue="hello" />
+          </DilekceField>
+          <DilekceField name="city" label="City">
+            <DilekceInput placeholder="Istanbul" />
+          </DilekceField>
+        </DilekceRow>
+        <button type="submit">Save</button>
+      </Dilekce>
+    )
+  }
+
+  for (const theme of ["light", "dark"] as const) {
+    test(`${theme}: invalid, hovered and focused cells keep small text at 4.5:1`, async () => {
+      document.documentElement.classList.toggle("dark", theme === "dark")
+      const screen = await render(<Contrast />)
+      await screen.getByRole("button", { name: "Save" }).click()
+      const name = fieldOf("name")
+      const label = name.querySelector("[data-slot=dilekce-label]")!
+      const error = name.querySelector("[data-slot=dilekce-error]")!
+      const numbers: Record<string, number> = {}
+      const measure = async (state: string, field: HTMLElement, texts: Element[]) => {
+        await sleep(300)
+        const background = style(field).backgroundColor
+        expect(rgba(background)[3], `${state}: the cell is opaque`).toBe(255)
+        for (const text of texts) {
+          const value = ratio(style(text).color, background)
+          numbers[`${state} ${text.getAttribute("data-slot")?.replace("dilekce-", "")}`] = value
+          expect(
+            value,
+            `${theme} ${state} ${text.getAttribute("data-slot")}`,
+          ).toBeGreaterThanOrEqual(4.5)
+        }
+      }
+
+      // Rest, focus away, pointer away.
+      ;(document.activeElement as HTMLElement).blur()
+      await userEvent.hover(document.body)
+      await measure("invalid", name, [label, error])
+      await userEvent.hover(label)
+      await measure("invalid+hover", name, [label, error])
+      await userEvent.hover(document.body)
+      $<HTMLInputElement>("[name=name]").focus()
+      await measure("invalid+focus", name, [label, error])
+
+      // A plain cell: hovered, with a placeholder; focused, with the counter.
+      ;(document.activeElement as HTMLElement).blur()
+      const city = fieldOf("city")
+      await userEvent.hover(city)
+      await measure("hover", city, [city.querySelector("[data-slot=dilekce-label]")!])
+      const input = $<HTMLInputElement>("[name=city]")
+      const placeholder = style(input, "::placeholder").color
+      expect(
+        ratio(placeholder, style(city).backgroundColor),
+        `${theme} hover placeholder`,
+      ).toBeGreaterThanOrEqual(4.5)
+      await userEvent.hover(document.body)
+      $<HTMLTextAreaElement>("[name=bio]").focus()
+      const bio = fieldOf("bio")
+      await measure("focus", bio, [bio.querySelector("[data-slot=dilekce-counter]")!])
+      console.info(
+        `contrast ${theme}`,
+        JSON.stringify(numbers, (_k, v) => (typeof v === "number" ? Math.round(v * 100) / 100 : v)),
+      )
+    })
+  }
+})
+
+describe("forced colors", () => {
+  function Forced() {
+    return (
+      <Dilekce>
+        <DilekceSection legend="Parcel">
+          <DilekceRow>
+            <DilekceField name="name" label="Name">
+              <DilekceInput />
+            </DilekceField>
+            <DilekceField name="kind" label="Kind">
+              <DilekceRadioGroup
+                name="kind"
+                defaultValue="a"
+                options={[
+                  { value: "a", label: "Alpha" },
+                  { value: "b", label: "Bravo" },
+                ]}
+              />
+            </DilekceField>
+            <DilekceField name="extras" label="Extras">
+              <DilekceCheckboxGroup
+                defaultValue={["x"]}
+                options={[
+                  { value: "x", label: "Xray" },
+                  { value: "y", label: "Yankee" },
+                ]}
+              />
+            </DilekceField>
+          </DilekceRow>
+        </DilekceSection>
+      </Dilekce>
+    )
+  }
+
+  for (const theme of ["light", "dark"] as const) {
+    test(`${theme}: the focused cell has an outline, the grid has borders, checked marks differ`, async () => {
+      document.documentElement.classList.toggle("dark", theme === "dark")
+      await emulate([{ name: "forced-colors", value: "active" }])
+      expect(matchMedia("(forced-colors: active)").matches).toBe(true)
+      await render(<Forced />)
+
+      const name = fieldOf("name")
+      // The lines between cells are borders: backgrounds are gone, gaps show Canvas.
+      expect(style(name).borderTopWidth).toBe("1px")
+      expect(style(name).borderTopStyle).toBe("solid")
+      expect(style($("[data-slot=dilekce-row]")).columnGap).toBe("0px")
+      expect(style($("[data-slot=dilekce-legend]")).borderTopWidth).toBe("1px")
+
+      // The box-shadow focus line is stripped; the outline is what shows.
+      expect(style(name).outlineStyle).toBe("none")
+      $<HTMLInputElement>("[name=name]").focus()
+      await sleep(250)
+      expect(style(name).outlineStyle).toBe("solid")
+      expect(style(name).outlineWidth).toBe("3px")
+      expect(style(name).outlineColor).not.toBe(style(name).backgroundColor)
+
+      // Checked and unchecked marks differ without any shadow or fill from us.
+      const [on, off] = [...document.querySelectorAll<HTMLInputElement>("input[type=radio]")]
+      expect(style(on!).borderTopWidth).not.toBe(style(off!).borderTopWidth)
+      expect(style(on!).borderTopColor).not.toBe(style(off!).borderTopColor)
+      const [ticked, empty] = [
+        ...document.querySelectorAll<HTMLInputElement>("input[type=checkbox]"),
+      ]
+      expect(style(ticked!).backgroundColor).not.toBe(style(empty!).backgroundColor)
+      // The tick is drawn in the system color for text on Highlight.
+      const tick = ticked!.nextElementSibling!
+      expect(style(tick).display).not.toBe("none")
+      expect(ratio(style(tick).color, style(ticked!).backgroundColor)).toBeGreaterThanOrEqual(4.5)
+    })
+  }
+
+  test("outside forced colors none of that applies", async () => {
+    await render(<Forced />)
+    expect(style(fieldOf("name")).borderTopWidth).toBe("0px")
+  })
+})
+
+describe("announcements", () => {
+  function Announced() {
+    return (
+      <Dilekce>
+        <DilekceRow>
+          <DilekceField name="email" label="Email">
+            <DilekceInput type="email" />
+          </DilekceField>
+          <DilekceField
+            name="user"
+            label="Username"
+            validate={(value) =>
+              new Promise((resolve) =>
+                setTimeout(() => resolve(value === "taken" ? "Already used" : null), 200),
+              )
+            }
+          >
+            <DilekceInput />
+          </DilekceField>
+        </DilekceRow>
+        <DilekceActions>
+          <button type="submit">Save</button>
+        </DilekceActions>
+      </Dilekce>
+    )
+  }
+  const region = () => $("[role=status]")
+
+  test("a blur error is read once with its label, and typing doesn't repeat it", async () => {
+    const screen = await render(<Announced />)
+    expect(document.querySelectorAll("[aria-live=polite]")).toHaveLength(1)
+    const email = screen.getByRole("textbox", { name: "Email" })
+    await email.fill("x")
+    await userEvent.tab()
+    await expect.poll(() => region().textContent).toBe("Email: Check format")
+
+    // The message stays the same while the value is still wrong.
+    let writes = 0
+    const watch = new MutationObserver(() => writes++)
+    watch.observe(region(), { childList: true, characterData: true, subtree: true })
+    await email.click()
+    await userEvent.keyboard("yz")
+    await sleep(150)
+    expect(errorOf("email")).toBe("Check format")
+    expect(writes).toBe(0)
+
+    // Fixed, then broken again: said again.
+    await email.fill("a@b.co")
+    await userEvent.tab()
+    await sleep(100)
+    await email.fill("zz")
+    await userEvent.tab()
+    await expect.poll(() => writes).toBeGreaterThan(0)
+    expect(region().textContent).toContain("Email: Check format")
+    watch.disconnect()
+  })
+
+  test("Checking… and the result are announced", async () => {
+    const screen = await render(<Announced />)
+    await screen.getByRole("textbox", { name: "Username" }).fill("taken")
+    await userEvent.tab()
+    await expect.poll(() => region().textContent).toBe("Username: Checking…")
+    await expect.poll(() => region().textContent).toBe("Username: Already used")
+  })
+
+  test("a failed submit says the count, not every message", async () => {
+    const screen = await render(
+      <Dilekce>
+        <DilekceField name="a" label="A">
+          <DilekceInput required />
+        </DilekceField>
+        <DilekceField name="b" label="B">
+          <DilekceInput required />
+        </DilekceField>
+        <button type="submit">Save</button>
+      </Dilekce>,
+    )
+    await screen.getByRole("button", { name: "Save" }).click()
+    await sleep(100)
+    expect(region().textContent).toBe("2 fields need attention")
+  })
+
+  test("errors from outside are announced when they arrive", async () => {
+    function Server() {
+      const [errors, setErrors] = React.useState<DilekceErrors>({})
+      return (
+        <Dilekce errors={errors}>
+          <DilekceField name="a" label="A">
+            <DilekceInput />
+          </DilekceField>
+          <DilekceField name="b" label="B">
+            <DilekceInput />
+          </DilekceField>
+          <button type="button" onClick={() => setErrors({ a: "Taken", b: "Taken too" })}>
+            Fail
+          </button>
+        </Dilekce>
+      )
+    }
+    const screen = await render(<Server />)
+    await screen.getByRole("button", { name: "Fail" }).click()
+    await expect.poll(() => region().textContent).toBe("A: Taken. B: Taken too")
+  })
+
+  test("copying is announced", async () => {
+    vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue()
+    const screen = await render(
+      <Dilekce mode="filled">
+        <DilekceField name="w" label="Weight">
+          <DilekceInput defaultValue="2" />
+        </DilekceField>
+      </Dilekce>,
+    )
+    await screen.getByRole("button", { name: "Copy Weight" }).click()
+    await expect.poll(() => region().textContent).toBe("Weight: Copied")
+  })
+})
+
+describe("checkbox group semantics", () => {
+  const options = [
+    { value: "a", label: "Alpha" },
+    { value: "b", label: "Bravo" },
+  ]
+
+  test("required is said in words on the group; no aria-required or aria-readonly on a group", async () => {
+    await render(
+      <Dilekce>
+        <DilekceField name="x" label="Extras">
+          <DilekceCheckboxGroup required options={options} />
+        </DilekceField>
+      </Dilekce>,
+    )
+    const group = $("[role=group]")
+    expect(group.hasAttribute("aria-required")).toBe(false)
+    expect(group.hasAttribute("aria-readonly")).toBe(false)
+    expect(describedText(group)).toBe("Required")
+    // Native required would demand every box; none carries it.
+    expect(document.querySelector("input[required]")).toBeNull()
+  })
+
+  test("read-only is on each checkbox, and nowhere on the group", async () => {
+    await render(
+      <Dilekce mode="filled">
+        <DilekceField name="x" label="Extras">
+          <DilekceCheckboxGroup defaultValue={["a"]} options={options} />
+        </DilekceField>
+      </Dilekce>,
+    )
+    expect($("[role=group]").hasAttribute("aria-readonly")).toBe(false)
+    const boxes = [...document.querySelectorAll("input[type=checkbox]")]
+    expect(boxes).toHaveLength(2)
+    expect(boxes.every((box) => box.getAttribute("aria-readonly") === "true")).toBe(true)
+  })
+})
+
+describe("steppers and targets", () => {
+  function Weight(props: { mode?: DilekceMode }) {
+    return (
+      <Dilekce mode={props.mode}>
+        <DilekceField name="w" label="Weight">
+          <DilekceNumber min={0} max={9} defaultValue={1} trailing="kg" />
+        </DilekceField>
+        <DilekceField name="p" label="Pieces">
+          <DilekceNumber min={0} max={9} defaultValue={1} />
+        </DilekceField>
+      </Dilekce>
+    )
+  }
+
+  test("each stepper is named with its field and is 24px", async () => {
+    const screen = await render(<Weight />)
+    for (const name of [
+      "Decrease Weight",
+      "Increase Weight",
+      "Decrease Pieces",
+      "Increase Pieces",
+    ]) {
+      const button = screen.getByRole("button", { name }).element()
+      const box = button.getBoundingClientRect()
+      expect(box.width).toBeGreaterThanOrEqual(24)
+      expect(box.height).toBeGreaterThanOrEqual(24)
+    }
+  })
+
+  test("a click without a press steps once; a press steps once and repeats while held", async () => {
+    const screen = await render(<Weight />)
+    const input = $<HTMLInputElement>("[name=w]")
+    const plus = screen
+      .getByRole("button", { name: "Increase Weight" })
+      .element() as HTMLButtonElement
+    // Keyboard, assistive tech, voice control and scripts click with no pointer events.
+    plus.click()
+    plus.click()
+    expect(input.value).toBe("3")
+
+    // A real press steps on pointerdown, the click after it doesn't step again.
+    await screen.getByRole("button", { name: "Increase Weight" }).click()
+    expect(input.value).toBe("4")
+
+    // Held: steps repeat.
+    plus.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }))
+    await sleep(700)
+    plus.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, button: 0 }))
+    expect(Number(input.value)).toBeGreaterThan(6)
+  })
+
+  for (const density of ["compact", "comfortable", "roomy"] as const) {
+    test(`${density}: the copy button is 24px and clear of the control`, async () => {
+      await render(
+        <Dilekce mode="filled" density={density}>
+          <DilekceField name="w" label="Weight">
+            <DilekceInput defaultValue="2" />
+          </DilekceField>
+        </Dilekce>,
+      )
+      const box = $("[data-slot=dilekce-copy]").getBoundingClientRect()
+      expect(box.width).toBeGreaterThanOrEqual(24)
+      expect(box.height).toBeGreaterThanOrEqual(24)
+      expect(box.bottom).toBeLessThanOrEqual($("[name=w]").getBoundingClientRect().top)
+    })
+  }
+
+  for (const theme of ["light", "dark"] as const) {
+    test(`${theme}: the copy button, radios and checkboxes focus with an outline over 3:1`, async () => {
+      document.documentElement.classList.toggle("dark", theme === "dark")
+      await render(
+        <>
+          <Dilekce mode="filled">
+            <DilekceField name="w" label="Weight">
+              <DilekceInput defaultValue="2" />
+            </DilekceField>
+          </Dilekce>
+          <Dilekce>
+            <DilekceField name="k" label="Kind">
+              <DilekceRadioGroup
+                defaultValue="a"
+                options={[
+                  { value: "a", label: "Alpha" },
+                  { value: "b", label: "Bravo" },
+                ]}
+              />
+            </DilekceField>
+            <DilekceField name="x" label="Extras">
+              <DilekceCheckboxGroup options={[{ value: "a", label: "Alpha" }]} />
+            </DilekceField>
+          </Dilekce>
+        </>,
+      )
+      // Filled: the copy button, then the (read-only) value; then the radio, the checkbox.
+      for (const kind of ["button", "text", "radio", "checkbox"]) {
+        await userEvent.tab()
+        if (kind === "text") continue
+        const target = document.activeElement as HTMLInputElement | HTMLButtonElement
+        expect(target.type).toBe(kind)
+        const field = target.closest(FIELD)!
+        expect(style(target).outlineStyle).toBe("solid")
+        expect(
+          ratio(style(target).outlineColor, style(field).backgroundColor),
+          `${theme} ${kind}`,
+        ).toBeGreaterThanOrEqual(3)
+      }
+    })
+  }
+})
+
+describe("reduced motion", () => {
+  test("transitions and the pulse stop", async () => {
+    await emulate([{ name: "prefers-reduced-motion", value: "reduce" }])
+    const screen = await render(
+      <Dilekce>
+        <DilekceField name="u" label="User" validate={() => new Promise<null>(() => {})}>
+          <DilekceInput defaultValue="a" />
+        </DilekceField>
+        <DilekceField name="n" label="N">
+          <DilekceNumber />
+        </DilekceField>
+      </Dilekce>,
+    )
+    expect(matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true)
+    expect(style(fieldOf("u")).transitionProperty).toBe("none")
+    expect(style($("button[aria-label=Increase]")).transitionProperty).toBe("none")
+    await screen.getByRole("textbox", { name: "User" }).click()
+    await userEvent.keyboard("b")
+    await userEvent.tab()
+    await expect.poll(() => document.querySelector("[data-slot=dilekce-pending]")).not.toBeNull()
+    expect(style($("[data-slot=dilekce-pending]")).animationName).toBe("none")
   })
 })
