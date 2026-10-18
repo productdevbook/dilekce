@@ -37,6 +37,8 @@ agent: write the English string and list the keys in your report.
 `bun run build`. Run a single file with `bunx vitest run test/dilekce.test.tsx`. The demo runs with
 `bun run dev` on http://127.0.0.1:5318.
 
+The dev server on port 5318 belongs to the user: never stop, restart or `pkill` it. If you need a server of your own, start it on another port (e.g. `bunx vite --port 5319`) and stop only that one, by its PID.
+
 ## Done
 
 The gates pass, `public/r` is rebuilt, new text exists in English and Turkish (the localizer writes

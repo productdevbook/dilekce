@@ -15,6 +15,8 @@ answers there, start it in the background and wait for Vite's ready line. Drive 
 project's own install: `import { chromium } from "/Users/code/opensource/dilekce/node_modules/playwright/index.mjs"`
 in a `.mjs` script under /tmp, run with `node`.
 
+The dev server on port 5318 belongs to the user: never stop, restart or `pkill` it. If you need a server of your own, start it on another port (e.g. `bunx vite --port 5319`) and stop only that one, by its PID.
+
 ## What to check
 
 - The brief names the feature. Exercise it the way a user would: click, type, Tab, Enter, drag.
