@@ -869,6 +869,114 @@ describe("form behaviour", () => {
   })
 })
 
+describe("refs", () => {
+  // What react-hook-form's register() hands a control: a name and a ref callback.
+  const register = (name: string) => ({ name, ref: vi.fn() })
+
+  test("a ref on the form keeps dirty tracking working", async () => {
+    const ref = vi.fn()
+    const onDirtyChange = vi.fn()
+    await render(
+      <Dilekce ref={ref} onDirtyChange={onDirtyChange}>
+        <DilekceField name="n" label="N">
+          <DilekceInput />
+        </DilekceField>
+      </Dilekce>,
+    )
+    expect(ref).toHaveBeenCalledWith($("form"))
+    await userEvent.type($("input"), "x")
+    expect(onDirtyChange).toHaveBeenLastCalledWith(true)
+    expect($("form").hasAttribute("data-dirty")).toBe(true)
+  })
+
+  test("a ref on a number keeps the steppers and the scrub working", async () => {
+    const field = register("qty")
+    const object = React.createRef<HTMLInputElement>()
+    const screen = await render(
+      <Dilekce>
+        <DilekceField label="Qty">
+          <DilekceNumber {...field} defaultValue={1} scrub={10} />
+        </DilekceField>
+        <DilekceField label="Other">
+          <DilekceNumber ref={object} name="other" defaultValue={1} />
+        </DilekceField>
+      </Dilekce>,
+    )
+    expect(field.ref).toHaveBeenCalledWith($("[name=qty]"))
+    expect(object.current).toBe($("[name=other]"))
+    await screen.getByRole("button", { name: "Increase" }).first().click()
+    expect($<HTMLInputElement>("[name=qty]").value).toBe("2")
+
+    const label = $("label")
+    const box = label.getBoundingClientRect()
+    const at = (x: number, type: string) =>
+      label.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          button: 0,
+          pointerId: 1,
+          clientX: box.left + x,
+          clientY: box.top + 4,
+        }),
+      )
+    at(5, "pointerdown")
+    at(35, "pointermove")
+    at(35, "pointerup")
+    expect($<HTMLInputElement>("[name=qty]").value).toBe("5")
+  })
+
+  test("a ref on a select keeps data-empty following a reset", async () => {
+    const field = register("size")
+    await render(
+      <Dilekce>
+        <DilekceField label="Size">
+          <DilekceSelect {...field} options={[{ value: "a", label: "A" }]} />
+        </DilekceField>
+        <button type="reset">Reset</button>
+      </Dilekce>,
+    )
+    expect(field.ref).toHaveBeenCalledWith($("select"))
+    await userEvent.selectOptions($("select"), "a")
+    expect($("select").hasAttribute("data-empty")).toBe(false)
+    $<HTMLFormElement>("form").reset()
+    await expect.poll(() => $("select").hasAttribute("data-empty")).toBe(true)
+  })
+
+  test("a ref on a field keeps its counter and validation working", async () => {
+    const ref = React.createRef<HTMLDivElement>()
+    const screen = await render(
+      <Dilekce>
+        <DilekceField ref={ref} name="n" label="N">
+          <DilekceInput maxLength={5} required />
+        </DilekceField>
+        <button type="submit">Save</button>
+      </Dilekce>,
+    )
+    expect(ref.current).toBe($("[data-slot=dilekce-field]"))
+    await userEvent.type($("input"), "ab")
+    expect($("[data-slot=dilekce-counter]").textContent).toBe("2/5")
+    await userEvent.clear($("input"))
+    await screen.getByRole("button", { name: "Save" }).click()
+    expect(errorOf("n")).toBe("Required")
+  })
+
+  test("refs are released on unmount", async () => {
+    const ref = vi.fn()
+    const object = React.createRef<HTMLDivElement>()
+    const screen = await render(
+      <Dilekce ref={ref}>
+        <DilekceField ref={object} name="n" label="N">
+          <DilekceInput />
+        </DilekceField>
+      </Dilekce>,
+    )
+    expect(object.current).not.toBeNull()
+    await screen.unmount()
+    expect(object.current).toBeNull()
+    expect(ref).toHaveBeenLastCalledWith(null)
+  })
+})
+
 describe("copying a filled form", () => {
   test("each value has a named copy button that copies what the cell says", async () => {
     const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue()

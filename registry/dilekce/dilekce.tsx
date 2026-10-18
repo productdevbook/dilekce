@@ -141,6 +141,33 @@ function useGroupLabel() {
   }, [setGroup])
 }
 
+/**
+ * One ref callback for several refs. React 19 hands a component's `ref` over as
+ * a prop, and spreading `...props` after our own `ref` would replace it: this
+ * keeps both, so react-hook-form's `register` and our own bookkeeping coexist.
+ */
+function useMergedRef<T>(...refs: Array<React.Ref<T> | undefined>): React.RefCallback<T> {
+  return React.useCallback((node: T | null) => {
+    const cleanups = refs.map((ref) => {
+      if (typeof ref === "function") {
+        const cleanup = ref(node)
+        return typeof cleanup === "function" ? cleanup : () => ref(null)
+      }
+      if (ref) {
+        ref.current = node
+        return () => {
+          ref.current = null
+        }
+      }
+      return undefined
+    })
+    return () => {
+      for (const cleanup of cleanups) cleanup?.()
+    }
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, refs)
+}
+
 const hasContent = (value: React.ReactNode) => value != null && value !== false && value !== ""
 
 const firstOf = (value: DilekceErrors[string]) =>
@@ -327,9 +354,11 @@ function Dilekce({
   onReset,
   onChange,
   onKeyDown,
+  ref,
   ...props
 }: DilekceProps) {
   const formRef = React.useRef<HTMLFormElement>(null)
+  const mergedRef = useMergedRef(formRef, ref)
   const supplied = errorsProp ?? NO_ERRORS
   const [errors, setErrors] = React.useState<DilekceErrors>(supplied)
   const [lastProp, setLastProp] = React.useState(errorsProp)
@@ -439,7 +468,7 @@ function Dilekce({
         data-mode={mode}
         data-density={density}
         data-focus={focus}
-        ref={formRef}
+        ref={mergedRef}
         noValidate
         data-dirty={dirty || undefined}
         data-checking={checking || undefined}
@@ -679,11 +708,13 @@ function DilekceField({
   onChange,
   onFocus,
   onMouseDown,
+  ref,
   ...props
 }: DilekceFieldProps) {
   const form = useForm()
   const id = React.useId()
   const fieldRef = React.useRef<HTMLDivElement>(null)
+  const mergedRef = useMergedRef(fieldRef, ref)
   const labelRef = React.useRef<HTMLElement>(null)
   // One ref for whichever element the label renders as.
   const setLabel = React.useCallback((node: HTMLElement | null) => {
@@ -852,7 +883,7 @@ function DilekceField({
   return (
     <FieldContext.Provider value={context}>
       <div
-        ref={fieldRef}
+        ref={mergedRef}
         data-slot="dilekce-field"
         data-invalid={invalid || undefined}
         data-below={below || undefined}
@@ -1152,6 +1183,7 @@ function DilekceSelect({
   defaultValue,
   onChange,
   onKeyDown,
+  ref,
   ...props
 }: DilekceSelectProps) {
   // <select> has no readOnly: filled mode guards it by hand instead.
@@ -1159,6 +1191,7 @@ function DilekceSelect({
   const [current, setCurrent] = React.useState(String(defaultValue ?? ""))
   const empty = (value === undefined ? current : String(value)) === ""
   const selectRef = React.useRef<HTMLSelectElement>(null)
+  const mergedRef = useMergedRef(selectRef, ref)
 
   // A form reset restores the selection without a change event.
   React.useEffect(() => {
@@ -1172,7 +1205,7 @@ function DilekceSelect({
   return (
     <div className="relative flex min-w-0 items-center [grid-area:control]">
       <select
-        ref={selectRef}
+        ref={mergedRef}
         data-slot="dilekce-select"
         data-empty={empty || undefined}
         value={value}
@@ -1261,11 +1294,13 @@ function DilekceNumber({
   placeholder = " ",
   leading,
   trailing,
+  ref,
   ...props
 }: DilekceNumberProps) {
   const control = useControl(props)
   const field = useField()
   const inputRef = React.useRef<HTMLInputElement>(null)
+  const mergedRef = useMergedRef(inputRef, ref)
   const locked = Boolean(control.readOnly || props.disabled)
 
   const nudge = React.useCallback((direction: 1 | -1) => {
@@ -1329,7 +1364,7 @@ function DilekceNumber({
     <div className="flex min-w-0 items-center gap-0.5 [grid-area:control]">
       <Affix side="leading">{leading}</Affix>
       <input
-        ref={inputRef}
+        ref={mergedRef}
         type="number"
         inputMode="decimal"
         data-slot="dilekce-number"
