@@ -1305,7 +1305,11 @@ const setNativeValue = (input: HTMLInputElement, next: string) => {
   input.dispatchEvent(new Event("input", { bubbles: true }))
 }
 
-const decimals = (n: number) => (String(n).split(".")[1] ?? "").length
+/** How many decimals a number is written with, reading `1e-7` as 7. */
+const decimals = (n: number) => {
+  const [mantissa = "", exponent = "0"] = String(n).split("e")
+  return Math.max(0, (mantissa.split(".")[1] ?? "").length - Number(exponent))
+}
 
 export interface DilekceNumberProps
   extends Omit<React.ComponentProps<"input">, "type">, DilekceAffixProps {
@@ -1344,6 +1348,13 @@ function DilekceNumber({
       if (direction > 0) input.stepUp()
       else input.stepDown()
     } catch {
+      // step="any" has no step to take: move by 1, keeping the value's decimals.
+      const current = before === "" ? 0 : Number(before)
+      if (Number.isNaN(current)) return
+      const min = input.min === "" ? -Infinity : Number(input.min)
+      const max = input.max === "" ? Infinity : Number(input.max)
+      const moved = Math.min(max, Math.max(min, current + direction))
+      if (moved !== current) setNativeValue(input, moved.toFixed(decimals(current)))
       return
     }
     const next = input.value

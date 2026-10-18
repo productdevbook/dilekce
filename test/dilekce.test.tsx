@@ -380,6 +380,54 @@ describe("controls", () => {
     expect(input.value).toBe("1")
   })
 
+  test('step="any" steppers move by 1 and keep the decimals', async () => {
+    const onChange = vi.fn()
+    const screen = await render(
+      <Dilekce>
+        <DilekceField name="price" label="Price">
+          <DilekceNumber step="any" min={0} max={3} defaultValue={1.25} onChange={onChange} />
+        </DilekceField>
+      </Dilekce>,
+    )
+    const input = $<HTMLInputElement>("[name=price]")
+    await screen.getByRole("button", { name: "Increase" }).click()
+    expect(input.value).toBe("2.25")
+    await screen.getByRole("button", { name: "Increase" }).click()
+    expect(input.value).toBe("3.00")
+    await screen.getByRole("button", { name: "Increase" }).click()
+    expect(input.value).toBe("3.00")
+    expect(onChange).toHaveBeenCalledTimes(2)
+    await userEvent.clear(input)
+    await screen.getByRole("button", { name: "Increase" }).click()
+    expect(input.value).toBe("1")
+  })
+
+  test('step="any" scrubs by 1', async () => {
+    await render(
+      <Dilekce>
+        <DilekceField name="w" label="Weight">
+          <DilekceNumber step="any" min={-10} defaultValue={-2.5} scrub={10} />
+        </DilekceField>
+      </Dilekce>,
+    )
+    const label = $("label")
+    const box = label.getBoundingClientRect()
+    const at = (x: number, type: string) =>
+      label.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          button: 0,
+          pointerId: 1,
+          clientX: box.left + x,
+          clientY: box.top + 4,
+        }),
+      )
+    at(5, "pointerdown")
+    at(35, "pointermove")
+    at(35, "pointerup")
+    expect($<HTMLInputElement>("[name=w]").value).toBe("0.5")
+  })
+
   test("dragging across a number's label scrubs it", async () => {
     await render(
       <Dilekce>
