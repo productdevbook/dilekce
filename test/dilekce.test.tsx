@@ -3494,12 +3494,14 @@ describe("file input", () => {
 
   test("the browser's button is a small outline button in the theme's tokens", async () => {
     await render(<Upload />)
+    // The mouse stays where an earlier test left it: park it off the button so it isn't hovered.
+    await userEvent.unhover(input())
     const button = style(input(), "::file-selector-button")
     const probe = document.createElement("i")
     probe.className = "border-input bg-background text-foreground"
     document.body.append(probe)
     const tokens = style(probe)
-    // The button eases its colors in (transition-colors), and a slow machine reads them mid-way, as
+    // The button eases its colors (transition-colors), and a slow machine reads them mid-way, as
     // oklab. Wait for the transition to settle rather than racing it.
     await vi.waitFor(() => {
       expect(button.backgroundColor).toBe(tokens.backgroundColor)
